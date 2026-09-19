@@ -42,8 +42,9 @@ export const CELL_JITTER = 0.06;
 const SHRINK_FACTOR = 0.6;
 
 // Integer-lattice hash to [0, 1). Cell coordinates may be negative (the
-// mesher and shore map pad the grid), which the |0 wrap handles.
-function cellHash(x, y, z) {
+// mesher and shore map pad the grid), which the |0 wrap handles. Also used by
+// trees.js (with salted coordinates) so tree placement is per-cell stable.
+export function cellHash(x, y, z) {
   let h = (x * 374761393 + y * 668265263 + z * 1911520717) | 0;
   h = ((h ^ (h >>> 13)) * 1274126177) | 0;
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;

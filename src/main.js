@@ -4,6 +4,7 @@ import { VoxelGrid } from './voxels.js';
 import { buildSmoothTerrainGeometry } from './terrainmesh.js';
 import { createTerrainMaterial, createSubmergedOverlay } from './terrainmaterial.js';
 import { createWater, WATER_LEVEL } from './water.js';
+import { buildTreesGeometry, createTreeMaterial } from './trees.js';
 import { loadGrid, saveGrid, loadCamera, saveCamera, loadHistory, saveHistory, clearHistory } from './storage.js';
 import { UndoStack } from './history.js';
 import { createRetroRenderer, snapScene } from './retro.js';
@@ -110,11 +111,18 @@ scene.add(terrain);
 // opaque water (see terrainmaterial.js).
 const terrainOverlay = createSubmergedOverlay(terrain);
 scene.add(terrainOverlay);
+// Trees are derived from the grid too (see trees.js) and rebuilt with it.
+const trees = new THREE.Mesh(buildTreesGeometry(grid), createTreeMaterial());
+trees.castShadow = true;
+trees.receiveShadow = true;
+scene.add(trees);
 
 function rebuildTerrain() {
   terrain.geometry.dispose();
   terrain.geometry = buildSmoothTerrainGeometry(grid);
   terrainOverlay.geometry = terrain.geometry;
+  trees.geometry.dispose();
+  trees.geometry = buildTreesGeometry(grid);
   water.updateShore(grid);
 }
 

@@ -62,7 +62,7 @@ const PATCH_SHADE = 0.14;
 // crisp step (the mesh has no vertices at the border), it just gives lawns a
 // slight bulge; the rim shading in the material does the rest. Keep it well
 // under MAX_DRIFT so the cursor's grid-derived placement stays believable.
-const GRASS_LIFT = 0.08;
+export const GRASS_LIFT = 0.08;
 const tmpColor = new THREE.Color();
 const tmpGrass = new THREE.Color();
 
