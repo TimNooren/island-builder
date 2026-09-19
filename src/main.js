@@ -4,7 +4,8 @@ import { VoxelGrid } from './voxels.js';
 import { buildSmoothTerrainGeometry } from './terrainmesh.js';
 import { createTerrainMaterial, createSubmergedOverlay } from './terrainmaterial.js';
 import { createWater, WATER_LEVEL } from './water.js';
-import { loadGrid, saveGrid, loadCamera, saveCamera } from './storage.js';
+import { loadGrid, saveGrid, loadCamera, saveCamera, loadHistory, saveHistory, clearHistory } from './storage.js';
+import { UndoStack } from './history.js';
 import { createRetroRenderer, snapScene } from './retro.js';
 
 const SIZE = 32;
@@ -97,7 +98,9 @@ scene.add(gridHelper);
 
 // ---------- Terrain ----------
 const grid = new VoxelGrid(SIZE, HEIGHT);
-loadGrid(grid);
+const undoStack = new UndoStack();
+if (loadGrid(grid)) loadHistory(undoStack, grid);
+else clearHistory();
 const terrainMaterial = createTerrainMaterial();
 let terrain = new THREE.Mesh(buildSmoothTerrainGeometry(grid), terrainMaterial);
 terrain.castShadow = true;
@@ -113,7 +116,40 @@ function rebuildTerrain() {
   terrain.geometry = buildSmoothTerrainGeometry(grid);
   terrainOverlay.geometry = terrain.geometry;
   water.updateShore(grid);
-  statsEl.textContent = `${grid.count()} blocks · ${SIZE}×${SIZE}×${HEIGHT}`;
+}
+
+function persist() {
+  saveGrid(grid);
+  saveHistory(undoStack);
+}
+
+/** Apply a cell edit, record it for undo, and refresh derived state. */
+function editCell(x, y, z, solid) {
+  const prev = grid.get(x, y, z);
+  if (!!prev === !!solid) return;
+  undoStack.push(x, y, z, prev, solid);
+  grid.set(x, y, z, solid);
+  rebuildTerrain();
+  persist();
+}
+
+function applyHistory(entry, solid) {
+  grid.set(entry.x, entry.y, entry.z, solid);
+  rebuildTerrain();
+  persist();
+  updateGhost(lastPointer.x, lastPointer.y, false);
+}
+
+function undo() {
+  const entry = undoStack.popUndo();
+  if (!entry) return;
+  applyHistory(entry, entry.before);
+}
+
+function redo() {
+  const entry = undoStack.popRedo();
+  if (!entry) return;
+  applyHistory(entry, entry.after);
 }
 
 // ---------- Cursor: arrow on the picked face, translucent disc at its base ----------
@@ -170,7 +206,6 @@ const tmpNormal = new THREE.Vector3();
 // ---------- Picking ----------
 const raycaster = new THREE.Raycaster();
 const pointerNdc = new THREE.Vector2();
-const statsEl = document.getElementById('stats');
 const NO_PICK = { cell: null, target: null, normal: null, base: null };
 
 /**
@@ -271,19 +306,22 @@ renderer.domElement.addEventListener('pointerup', (e) => {
 
   const { cell, target } = pick(e.clientX, e.clientY);
   if (e.button === 0 && target) {
-    grid.set(...target, true);
-    rebuildTerrain();
-    saveGrid(grid);
+    editCell(...target, true);
   } else if (e.button === 2 && cell) {
-    grid.set(...cell, false);
-    rebuildTerrain();
-    saveGrid(grid);
+    editCell(...cell, false);
   }
   updateGhost(e.clientX, e.clientY, false);
 });
 
 renderer.domElement.addEventListener('pointerleave', () => {
   cursor.visible = false;
+});
+
+window.addEventListener('keydown', (e) => {
+  if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'z' || e.altKey) return;
+  e.preventDefault();
+  if (e.shiftKey) redo();
+  else undo();
 });
 
 window.addEventListener('resize', () => {

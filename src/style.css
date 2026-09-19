@@ -13,29 +13,3 @@ canvas {
      browser doesn't smooth it again if the canvas is ever scaled by CSS. */
   image-rendering: pixelated;
 }
-
-/* Console-menu box: hard corners, a solid light border, monospace text. */
-#hud {
-  position: fixed;
-  left: 12px;
-  top: 12px;
-  padding: 10px 12px;
-  background: rgba(10, 20, 60, 0.85);
-  color: #dbe7f3;
-  font-family: 'Courier New', Courier, monospace;
-  font-size: 13px;
-  line-height: 1.6;
-  border: 2px solid #c9dcf0;
-  box-shadow: 2px 2px 0 #06122a;
-  pointer-events: none;
-  user-select: none;
-}
-
-#hud b {
-  color: #fff;
-}
-
-#stats {
-  margin-top: 6px;
-  opacity: 0.7;
-}

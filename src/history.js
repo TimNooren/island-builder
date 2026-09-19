@@ -1,0 +1,67 @@
+/**
+ * Bounded undo/redo of single-cell voxel edits. Each entry records the cell
+ * state before and after the change so either direction can restore exactly.
+ * A fresh edit clears the redo branch (standard linear history).
+ *
+ * Depth is kept small so the stacks are cheap to persist in localStorage.
+ */
+
+export const MAX_HISTORY = 32;
+
+export class UndoStack {
+  constructor(max = MAX_HISTORY) {
+    this.max = max;
+    this.undo = [];
+    this.redo = [];
+  }
+
+  get canUndo() {
+    return this.undo.length > 0;
+  }
+
+  get canRedo() {
+    return this.redo.length > 0;
+  }
+
+  /** Record an edit; drops any redo branch. */
+  push(x, y, z, before, after) {
+    this.undo.push({
+      x,
+      y,
+      z,
+      before: before ? 1 : 0,
+      after: after ? 1 : 0,
+    });
+    if (this.undo.length > this.max) this.undo.shift();
+    this.redo.length = 0;
+  }
+
+  popUndo() {
+    const entry = this.undo.pop() ?? null;
+    if (entry) {
+      this.redo.push(entry);
+      if (this.redo.length > this.max) this.redo.shift();
+    }
+    return entry;
+  }
+
+  popRedo() {
+    const entry = this.redo.pop() ?? null;
+    if (entry) {
+      this.undo.push(entry);
+      if (this.undo.length > this.max) this.undo.shift();
+    }
+    return entry;
+  }
+
+  /** Replace stacks from a previously saved snapshot (already validated). */
+  restore(undo, redo) {
+    this.undo = undo.slice(-this.max);
+    this.redo = redo.slice(-this.max);
+  }
+
+  clear() {
+    this.undo.length = 0;
+    this.redo.length = 0;
+  }
+}
