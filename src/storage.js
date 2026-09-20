@@ -6,7 +6,7 @@
  * A 32×32×24 grid is ~25k cells but mostly empty (and what isn't is clumpy),
  * so runs are a few hundred numbers instead of a 25k-char string, which keeps
  * the write after every click negligible. Undo/redo is a short list of
- * single-cell before/after records saved alongside.
+ * before/after records (single cell or a batch from one gesture) saved alongside.
  */
 
 const STORAGE_KEY = 'island-builder:grid';
@@ -86,7 +86,7 @@ export function loadGrid(grid) {
   }
 }
 
-function isHistoryEntry(e, grid) {
+function isCellChange(e, grid) {
   return (
     e &&
     Number.isInteger(e.x) &&
@@ -96,6 +96,14 @@ function isHistoryEntry(e, grid) {
     (e.before === 0 || e.before === 1) &&
     (e.after === 0 || e.after === 1)
   );
+}
+
+/** Single-cell entry or a batch `{cells:[...]}` from one gesture. */
+function isHistoryEntry(e, grid) {
+  if (e && Array.isArray(e.cells)) {
+    return e.cells.length > 0 && e.cells.every((c) => isCellChange(c, grid));
+  }
+  return isCellChange(e, grid);
 }
 
 /** Persist undo/redo stacks alongside the grid. */

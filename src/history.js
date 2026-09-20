@@ -1,6 +1,7 @@
 /**
- * Bounded undo/redo of single-cell voxel edits. Each entry records the cell
- * state before and after the change so either direction can restore exactly.
+ * Bounded undo/redo of voxel edits. An entry is either a single cell
+ * `{x,y,z,before,after}` or a batch `{cells:[...]}` for one gesture (e.g. an
+ * extrude drag). Either direction restores from the recorded before/after.
  * A fresh edit clears the redo branch (standard linear history).
  *
  * Depth is kept small so the stacks are cheap to persist in localStorage.
@@ -23,15 +24,33 @@ export class UndoStack {
     return this.redo.length > 0;
   }
 
-  /** Record an edit; drops any redo branch. */
+  /** Record a single-cell edit; drops any redo branch. */
   push(x, y, z, before, after) {
-    this.undo.push({
+    this._pushEntry({
       x,
       y,
       z,
       before: before ? 1 : 0,
       after: after ? 1 : 0,
     });
+  }
+
+  /** Record several cell edits as one undo step (e.g. an extrude gesture). */
+  pushBatch(cells) {
+    if (!cells.length) return;
+    this._pushEntry({
+      cells: cells.map((c) => ({
+        x: c.x,
+        y: c.y,
+        z: c.z,
+        before: c.before ? 1 : 0,
+        after: c.after ? 1 : 0,
+      })),
+    });
+  }
+
+  _pushEntry(entry) {
+    this.undo.push(entry);
     if (this.undo.length > this.max) this.undo.shift();
     this.redo.length = 0;
   }

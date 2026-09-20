@@ -7,6 +7,19 @@
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
+    <aside id="hud" class="hud" aria-label="Controls">
+      <dl class="hud-keys">
+        <div><dt>drag</dt><dd>pan</dd></div>
+        <div><dt>⇧ drag</dt><dd>orbit</dd></div>
+        <div><dt data-mod>⌘ drag</dt><dd>paint</dd></div>
+        <div><dt data-mod-shift>⌘⇧ drag</dt><dd>erase</dd></div>
+        <div><dt data-mod-z>⌘Z</dt><dd>undo</dd></div>
+      </dl>
+      <div class="hud-actions">
+        <button type="button" id="grid-btn" class="hud-btn" aria-pressed="true">Grid</button>
+        <button type="button" id="clear-btn" class="hud-btn">Clear</button>
+      </div>
+    </aside>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

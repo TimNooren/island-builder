@@ -13,3 +13,76 @@ canvas {
      browser doesn't smooth it again if the canvas is ever scaled by CSS. */
   image-rendering: pixelated;
 }
+
+.hud {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 1;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: rgba(11, 30, 51, 0.55);
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 12px;
+  line-height: 1.35;
+  letter-spacing: 0.01em;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  user-select: none;
+  /* Legend is display-only; only the button should steal clicks from the canvas. */
+  pointer-events: none;
+}
+
+.hud-keys {
+  margin: 0 0 8px;
+  display: grid;
+  gap: 2px 10px;
+}
+
+.hud-keys > div {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.hud-keys dt {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.hud-keys dd {
+  margin: 0;
+}
+
+.hud-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.hud-btn {
+  margin: 0;
+  padding: 5px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.hud-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.hud-btn:active {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.hud-btn[aria-pressed='true'] {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.35);
+}

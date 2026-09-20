@@ -1,9 +1,9 @@
 # island-builder
 
 A browser toy for sculpting a small island out of blocks, Townscaper-style:
-click on the water or on a face to add a block, right-click to remove one.
-The blocky data is rendered as smooth, cartoonish terrain sitting in animated
-water. No backend, no framework, no tests — a single Vite page and Three.js.
+cmd/ctrl-drag to paint blocks, cmd/ctrl+shift-drag to erase. The blocky data
+is rendered as smooth, cartoonish terrain sitting in animated water. No
+backend, no framework, no tests — a single Vite page and Three.js.
 
 ## Stack
 

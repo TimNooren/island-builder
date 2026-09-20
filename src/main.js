@@ -47,13 +47,13 @@ camera.position.set(SIZE * 1.1, SIZE * 0.9, SIZE * 1.1);
 retro.setSize(window.innerWidth, window.innerHeight, camera);
 
 // Google-Earth-ish camera, Townscaper-ish edit:
-//   left drag            pan
-//   right drag           pan
-//   shift + left drag    orbit around the raycast hit (off-centre ok)
-//   cmd/ctrl held        extrude mode (placement ghost + click to add)
-//   right click          remove
+//   left / right drag          pan
+//   shift + left drag          orbit around the raycast hit (off-centre ok)
+//   cmd/ctrl + left drag       paint add (cell-change; no pan)
+//   cmd/ctrl + shift + left    paint erase (cell-change; no pan)
 // OrbitControls must not rotate: with LEFT mapped to PAN it treats any
-// modifier+left as ROTATE around the look-at target — the wrong pivot.
+// modifier+left as ROTATE around the look-at target — the wrong pivot. That
+// swap is also what blocks pan while cmd/ctrl is held (rotate is disabled).
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(SIZE / 2, WATER_LEVEL, SIZE / 2);
 controls.mouseButtons = {
@@ -146,43 +146,54 @@ function persist() {
   saveHistory(undoStack);
 }
 
-/** Apply a cell edit, record it for undo, and refresh derived state. */
-function editCell(x, y, z, solid) {
-  const prev = grid.get(x, y, z);
-  if (!!prev === !!solid) return;
-  undoStack.push(x, y, z, prev, solid);
-  grid.set(x, y, z, solid);
+/** Apply an undo/redo entry. `towardBefore` true = undo, false = redo. */
+function applyHistory(entry, towardBefore) {
+  const cells = entry.cells ?? [entry];
+  for (const c of cells) {
+    grid.set(c.x, c.y, c.z, towardBefore ? c.before : c.after);
+  }
   rebuildTerrain();
   persist();
-}
-
-function applyHistory(entry, solid) {
-  grid.set(entry.x, entry.y, entry.z, solid);
-  rebuildTerrain();
-  persist();
-  updateGhost(lastPointer.x, lastPointer.y, ghostOptsFromKeys());
+  updateGhost(lastPointer.x, lastPointer.y, ghostOpts());
 }
 
 function undo() {
   const entry = undoStack.popUndo();
   if (!entry) return;
-  applyHistory(entry, entry.before);
+  applyHistory(entry, true);
 }
 
 function redo() {
   const entry = undoStack.popRedo();
   if (!entry) return;
-  applyHistory(entry, entry.after);
+  applyHistory(entry, false);
 }
 
-// ---------- Cursor: arrow on the picked face, translucent disc at its base ----------
+/** Wipe every solid cell as one undoable step. */
+function clearIsland() {
+  if (paintStroke) endPaint();
+  const cells = [];
+  for (let y = 0; y < grid.height; y++) {
+    for (let z = 0; z < grid.size; z++) {
+      for (let x = 0; x < grid.size; x++) {
+        if (!grid.get(x, y, z)) continue;
+        cells.push({ x, y, z, before: 1, after: 0 });
+        grid.set(x, y, z, false);
+      }
+    }
+  }
+  if (!cells.length) return;
+  undoStack.pushBatch(cells);
+  rebuildTerrain();
+  persist();
+  updateGhost(lastPointer.x, lastPointer.y, ghostOpts());
+}
+
+// ---------- Cursor: translucent disc on the picked face ----------
 // Drawn without depth testing so it never sinks into the smoothed terrain and
 // stays readable when the picked face is partly hidden behind a slope.
 const CURSOR_ADD = new THREE.Color(0xffffff);
 const CURSOR_REMOVE = new THREE.Color(0xff5a4d);
-const ARROW_SHAFT_LEN = 0.55;
-const ARROW_HEAD_LEN = 0.3;
-const ARROW_LEN = ARROW_SHAFT_LEN + ARROW_HEAD_LEN;
 
 const cursorMaterials = [];
 function cursorMaterial(opacity) {
@@ -202,25 +213,14 @@ const cursor = new THREE.Group();
 cursor.renderOrder = 999;
 cursor.visible = false;
 
-// Base disc lies in the face plane (local XZ), facing along the local +Y normal.
+// Disc lies in the face plane (local XZ), facing along the local +Y normal.
 const cursorDisc = new THREE.Mesh(new THREE.CircleGeometry(0.44, 48), cursorMaterial(0.3));
 cursorDisc.rotation.x = -Math.PI / 2;
 const cursorRing = new THREE.Mesh(new THREE.RingGeometry(0.41, 0.44, 48), cursorMaterial(0.85));
 cursorRing.rotation.x = -Math.PI / 2;
 
-// Arrow along local +Y: shaft from the disc, cone on top.
-const cursorArrow = new THREE.Group();
-const cursorShaft = new THREE.Mesh(
-  new THREE.CylinderGeometry(0.06, 0.06, ARROW_SHAFT_LEN, 16),
-  cursorMaterial(0.9)
-);
-cursorShaft.position.y = ARROW_SHAFT_LEN / 2;
-const cursorHead = new THREE.Mesh(new THREE.ConeGeometry(0.18, ARROW_HEAD_LEN, 24), cursorMaterial(0.9));
-cursorHead.position.y = ARROW_SHAFT_LEN + ARROW_HEAD_LEN / 2;
-cursorArrow.add(cursorShaft, cursorHead);
-
-cursor.add(cursorDisc, cursorRing, cursorArrow);
-for (const child of [cursorDisc, cursorRing, cursorShaft, cursorHead]) child.renderOrder = 999;
+cursor.add(cursorDisc, cursorRing);
+for (const child of [cursorDisc, cursorRing]) child.renderOrder = 999;
 scene.add(cursor);
 
 const UP = new THREE.Vector3(0, 1, 0);
@@ -277,50 +277,136 @@ function pick(clientX, clientY) {
   return NO_PICK;
 }
 
-function updateGhost(clientX, clientY, { extrude = false, remove = false } = {}) {
-  const { cell, target, normal, base } = pick(clientX, clientY);
-  const showRemove = remove && cell;
-  const showAdd = extrude && !remove && target;
-  if (!(showRemove || showAdd)) {
-    cursor.visible = false;
-    return;
-  }
+function setCursor(base, normal, remove) {
   cursor.visible = true;
   cursor.position.set(base[0], base[1], base[2]);
   tmpNormal.set(normal[0], normal[1], normal[2]);
   cursor.quaternion.setFromUnitVectors(UP, tmpNormal);
-
-  // Add: arrow grows out of the face. Remove: arrow hangs above the face,
-  // pointing back into the block.
-  if (showRemove) {
-    cursorArrow.scale.y = -1;
-    cursorArrow.position.y = ARROW_LEN;
-  } else {
-    cursorArrow.scale.y = 1;
-    cursorArrow.position.y = 0;
-  }
-  const col = showRemove ? CURSOR_REMOVE : CURSOR_ADD;
+  const col = remove ? CURSOR_REMOVE : CURSOR_ADD;
   for (const m of cursorMaterials) m.color.copy(col);
 }
 
-// ---------- Input: distinguish click from drag ----------
-let pointerDown = null; // { x, y, button }
+function updateGhost(clientX, clientY, { paint = false, remove = false } = {}) {
+  const { cell, target, normal, base } = pick(clientX, clientY);
+  const showRemove = remove && cell;
+  const showAdd = paint && !remove && target;
+  if (!(showRemove || showAdd)) {
+    cursor.visible = false;
+    return;
+  }
+  setCursor(base, normal, showRemove);
+}
+
+// ---------- Paint: cmd/ctrl (+ shift to erase), one cell per distinct pick ----------
+// Holding still does nothing after the first edit. Stacking/carving straight
+// along the last face normal (spire or tunnel toward the camera) is ignored
+// until the pick moves. Whole stroke = one undo.
+let paintStroke = null; // { erase, cells, lx,ly,lz, lnx,lny,lnz }
+
+function tryPaintAt(clientX, clientY) {
+  if (!paintStroke) return;
+  const { cell, target, normal } = pick(clientX, clientY);
+  if (!normal) return;
+
+  const { erase, lx, ly, lz, lnx, lny, lnz } = paintStroke;
+
+  if (erase) {
+    if (!cell) return;
+    const [cx, cy, cz] = cell;
+    const [nx, ny, nz] = normal;
+    if (lx === cx && ly === cy && lz === cz) return;
+    // Next solid straight inward — would tunnel without moving.
+    if (
+      lx !== null &&
+      cx === lx - lnx &&
+      cy === ly - lny &&
+      cz === lz - lnz
+    ) {
+      return;
+    }
+    if (!grid.get(cx, cy, cz)) return;
+
+    grid.set(cx, cy, cz, false);
+    paintStroke.cells.push({ x: cx, y: cy, z: cz, before: 1, after: 0 });
+    paintStroke.lx = cx;
+    paintStroke.ly = cy;
+    paintStroke.lz = cz;
+    paintStroke.lnx = nx;
+    paintStroke.lny = ny;
+    paintStroke.lnz = nz;
+  } else {
+    if (!target) return;
+    const [tx, ty, tz] = target;
+    const [nx, ny, nz] = normal;
+    if (lx === tx && ly === ty && lz === tz) return;
+    // Next cell straight along the last paint normal — would spire without moving.
+    if (
+      lx !== null &&
+      tx === lx + lnx &&
+      ty === ly + lny &&
+      tz === lz + lnz
+    ) {
+      return;
+    }
+    if (grid.get(tx, ty, tz)) return;
+
+    grid.set(tx, ty, tz, true);
+    paintStroke.cells.push({ x: tx, y: ty, z: tz, before: 0, after: 1 });
+    paintStroke.lx = tx;
+    paintStroke.ly = ty;
+    paintStroke.lz = tz;
+    paintStroke.lnx = nx;
+    paintStroke.lny = ny;
+    paintStroke.lnz = nz;
+  }
+
+  rebuildTerrain();
+  saveGrid(grid);
+}
+
+function beginPaint(clientX, clientY, erase) {
+  paintStroke = {
+    erase,
+    cells: [],
+    lx: null,
+    ly: null,
+    lz: null,
+    lnx: 0,
+    lny: 0,
+    lnz: 0,
+  };
+  tryPaintAt(clientX, clientY);
+}
+
+function endPaint() {
+  if (!paintStroke) return;
+  if (paintStroke.cells.length) undoStack.pushBatch(paintStroke.cells);
+  paintStroke = null;
+  saveHistory(undoStack);
+}
+
+// ---------- Input ----------
+let pointerDown = null; // { x, y } — orbit arm position for the drag threshold
 let lastPointer = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
 // Latest modifier state from key/pointer events (keyup clears meta/ctrl reliably).
-let mods = { shift: false, extrude: false };
+let mods = { shift: false, paintAdd: false, paintErase: false };
 
 function syncMods(e) {
+  const cmd = e.metaKey || e.ctrlKey;
   mods.shift = e.shiftKey;
-  // Cmd on macOS, Ctrl on Windows/Linux — extrude mode. Shift is orbit-only.
-  mods.extrude = (e.metaKey || e.ctrlKey) && !e.shiftKey;
+  // Cmd = paint add; cmd+shift = paint erase. Shift alone is orbit.
+  mods.paintAdd = cmd && !e.shiftKey;
+  mods.paintErase = cmd && e.shiftKey;
 }
 
-function ghostOpts(remove = false) {
-  return { extrude: mods.extrude, remove };
-}
-
-function ghostOptsFromKeys() {
-  return { extrude: mods.extrude, remove: false };
+function ghostOpts() {
+  if (paintStroke) {
+    return { paint: !paintStroke.erase, remove: paintStroke.erase };
+  }
+  return {
+    paint: mods.paintAdd,
+    remove: mods.paintErase,
+  };
 }
 
 // Cursor-pivot orbit (Google Earth): shift + left-drag rotates the camera and
@@ -334,27 +420,27 @@ let orbitDragging = false;
 let orbitLastX = 0;
 let orbitLastY = 0;
 
-// OrbitControls.STATE.PAN — used to force-pan under cmd/ctrl (see pointerdown).
-const OC_STATE_PAN = 2;
-
 /** World point under the pointer to pivot around; falls back to the water plane, then the current look-at. */
 function pickOrbitPivot(clientX, clientY, out) {
   const { base } = pick(clientX, clientY);
   if (base) {
     out.set(base[0], base[1], base[2]);
-    return;
-  }
-  pointerNdc.set((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
-  raycaster.setFromCamera(pointerNdc, camera);
-  const { origin: o, direction: d } = raycaster.ray;
-  if (d.y < 0) {
-    const t = (WATER_LEVEL - o.y) / d.y;
-    if (t > 0) {
-      out.set(o.x + d.x * t, WATER_LEVEL, o.z + d.z * t);
-      return;
+  } else {
+    pointerNdc.set((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
+    raycaster.setFromCamera(pointerNdc, camera);
+    const { origin: o, direction: d } = raycaster.ray;
+    if (d.y < 0) {
+      const t = (WATER_LEVEL - o.y) / d.y;
+      if (t > 0) out.set(o.x + d.x * t, WATER_LEVEL, o.z + d.z * t);
+      else out.copy(controls.target);
+    } else {
+      out.copy(controls.target);
     }
   }
-  out.copy(controls.target);
+  // A glance at distant water would otherwise put the pivot kilometres away and
+  // make small mouse moves whip the camera. Keep it over the editable footprint.
+  out.x = THREE.MathUtils.clamp(out.x, 0, SIZE);
+  out.z = THREE.MathUtils.clamp(out.z, 0, SIZE);
 }
 
 /**
@@ -439,26 +525,31 @@ renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 
 renderer.domElement.addEventListener('pointerdown', (e) => {
   syncMods(e);
-  pointerDown = { x: e.clientX, y: e.clientY, button: e.button };
+  pointerDown = { x: e.clientX, y: e.clientY };
 
-  if (e.button === 0 && e.shiftKey) {
-    // Shift+left: our cursor-pivot orbit (OC rotate is disabled).
+  if (e.button === 0 && (mods.paintAdd || mods.paintErase)) {
+    // Cmd/ctrl(+shift): paint stroke. Takes priority over shift-orbit.
+    // OC's modifier swap would try rotate (disabled), so no pan while painting.
+    beginPaint(e.clientX, e.clientY, mods.paintErase);
+    updateGhost(e.clientX, e.clientY, ghostOpts());
+  } else if (e.button === 0 && e.shiftKey) {
+    // Shift+left (no cmd): cursor-pivot orbit.
     pickOrbitPivot(e.clientX, e.clientY, orbitPivot);
     orbitArmed = true;
     orbitDragging = false;
     orbitLastX = e.clientX;
     orbitLastY = e.clientY;
-  } else if (e.button === 0 && mods.extrude) {
-    // Cmd/ctrl+left: OC would no-op (modifier swaps pan→rotate, rotate off).
-    // Force its pan path so extrude mode can still drag-pan.
-    controls._handleMouseDownPan(e);
-    controls.state = OC_STATE_PAN;
   }
 });
 
 renderer.domElement.addEventListener('pointermove', (e) => {
   syncMods(e);
   lastPointer = { x: e.clientX, y: e.clientY };
+  if (paintStroke && (e.buttons & 1) !== 0) {
+    tryPaintAt(e.clientX, e.clientY);
+    updateGhost(e.clientX, e.clientY, ghostOpts());
+    return;
+  }
   if (orbitArmed && (e.buttons & 1) !== 0) {
     if (!orbitDragging) {
       const dx = e.clientX - pointerDown.x;
@@ -477,40 +568,22 @@ renderer.domElement.addEventListener('pointermove', (e) => {
       return;
     }
   }
-  updateGhost(e.clientX, e.clientY, ghostOpts((e.buttons & 2) !== 0));
+  updateGhost(e.clientX, e.clientY, ghostOpts());
 });
 
 renderer.domElement.addEventListener('pointerup', (e) => {
   syncMods(e);
-  const wasOrbitDrag = orbitArmed && e.button === 0 && orbitDragging;
-  const wasOrbitGesture = orbitArmed && e.button === 0;
-  if (wasOrbitGesture) {
+  if (paintStroke && e.button === 0) endPaint();
+  if (orbitArmed && e.button === 0) {
     orbitArmed = false;
     orbitDragging = false;
   }
-  if (!pointerDown || pointerDown.button !== e.button) {
-    pointerDown = null;
-    updateGhost(e.clientX, e.clientY, ghostOpts());
-    return;
-  }
-  const dx = e.clientX - pointerDown.x;
-  const dy = e.clientY - pointerDown.y;
   pointerDown = null;
-  if (wasOrbitDrag || wasOrbitGesture || Math.hypot(dx, dy) > DRAG_THRESHOLD_PX) {
-    updateGhost(e.clientX, e.clientY, ghostOpts());
-    return;
-  }
-
-  const { cell, target } = pick(e.clientX, e.clientY);
-  if (e.button === 0 && mods.extrude && target) {
-    editCell(...target, true);
-  } else if (e.button === 2 && cell) {
-    editCell(...cell, false);
-  }
   updateGhost(e.clientX, e.clientY, ghostOpts());
 });
 
 renderer.domElement.addEventListener('pointerleave', () => {
+  if (paintStroke) endPaint();
   orbitArmed = false;
   orbitDragging = false;
   cursor.visible = false;
@@ -520,27 +593,45 @@ window.addEventListener('keydown', (e) => {
   syncMods(e);
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z' && !e.altKey) {
     e.preventDefault();
+    if (paintStroke) return; // don't undo mid-stroke
     if (e.shiftKey) redo();
     else undo();
     return;
   }
-  updateGhost(lastPointer.x, lastPointer.y, ghostOptsFromKeys());
+  updateGhost(lastPointer.x, lastPointer.y, ghostOpts());
 });
 
 window.addEventListener('keyup', (e) => {
   syncMods(e);
-  updateGhost(lastPointer.x, lastPointer.y, ghostOptsFromKeys());
+  updateGhost(lastPointer.x, lastPointer.y, ghostOpts());
 });
 
 window.addEventListener('blur', () => {
+  if (paintStroke) endPaint();
   mods.shift = false;
-  mods.extrude = false;
+  mods.paintAdd = false;
+  mods.paintErase = false;
   cursor.visible = false;
 });
 
 window.addEventListener('resize', () => {
   retro.setSize(window.innerWidth, window.innerHeight, camera);
 });
+
+// ---------- HUD ----------
+// Labels use ⌘ on Apple platforms and Ctrl elsewhere (same as the paint/undo
+// shortcuts). Stop pointer events so OrbitControls don't pan through the panel.
+const isApple = /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+const mod = isApple ? '⌘' : 'Ctrl';
+for (const el of document.querySelectorAll('[data-mod]')) el.textContent = `${mod} drag`;
+for (const el of document.querySelectorAll('[data-mod-shift]')) el.textContent = `${mod}⇧ drag`;
+for (const el of document.querySelectorAll('[data-mod-z]')) el.textContent = `${mod}Z`;
+
+document.getElementById('grid-btn').addEventListener('click', (e) => {
+  gridHelper.visible = !gridHelper.visible;
+  e.currentTarget.setAttribute('aria-pressed', String(gridHelper.visible));
+});
+document.getElementById('clear-btn').addEventListener('click', () => clearIsland());
 
 // ---------- Loop ----------
 rebuildTerrain();
