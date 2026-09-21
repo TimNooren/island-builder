@@ -11,6 +11,7 @@
       <div class="hud-modes" role="group" aria-label="Control mode">
         <button type="button" id="mode-earth-btn" class="hud-btn" aria-pressed="true">Earth</button>
         <button type="button" id="mode-tools-btn" class="hud-btn" aria-pressed="false">1-2-3</button>
+        <button type="button" id="mode-build-btn" class="hud-btn" aria-pressed="false">Build</button>
       </div>
       <dl class="hud-keys" id="hud-keys-earth">
         <div><dt>drag</dt><dd>pan</dd></div>
@@ -25,6 +26,14 @@
         <div><dt>1 drag</dt><dd>pan</dd></div>
         <div><dt>2 drag</dt><dd>zoom</dd></div>
         <div><dt>3 drag</dt><dd>orbit</dd></div>
+        <div><dt data-mod-z>⌘Z</dt><dd>undo</dd></div>
+      </dl>
+      <dl class="hud-keys" id="hud-keys-build" hidden>
+        <div><dt>click</dt><dd>place / select</dd></div>
+        <div><dt>drag arrow</dt><dd>extrude face</dd></div>
+        <div><dt>right-click</dt><dd>delete</dd></div>
+        <div><dt>drag</dt><dd>pan</dd></div>
+        <div><dt>⇧ drag</dt><dd>orbit</dd></div>
         <div><dt data-mod-z>⌘Z</dt><dd>undo</dd></div>
       </dl>
       <label class="hud-time">

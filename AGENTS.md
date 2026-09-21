@@ -31,8 +31,10 @@ rather than growing the orchestrator.
   its centre is at `+0.5`. `y` is up; still water sits slightly above `y = 0`
   so the ground layer is half submerged.
 - The voxel grid is the single source of truth. Derived views (terrain mesh,
-  water shore map, and so on) rebuild in full after every edit — cheap at this
-  size; don't add chunking or caching unless measured to be needed.
+  submerged overlay, trees, water shore map) live behind `createDerivedViews`
+  in `derived.js` and rebuild in full after every edit via `rebuild(grid)` —
+  cheap at this size; don't add chunking or caching unless measured to be
+  needed. Edit sites call that one entry point; they do not list the fan-out.
 - The render mesh is a smoothed approximation of the cubes. Anything that
   needs to be exact (picking, placement, bounds) should query the grid, not
   the mesh.

@@ -1,11 +1,20 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { VoxelGrid } from './voxels.js';
-import { buildSmoothTerrainGeometry } from './terrainmesh.js';
-import { createTerrainMaterial, createSubmergedOverlay } from './terrainmaterial.js';
 import { createWater, WATER_LEVEL } from './water.js';
-import { buildTreesGeometry, createTreeMaterial } from './trees.js';
-import { loadGrid, saveGrid, loadCamera, saveCamera, loadHistory, saveHistory, clearHistory, loadControlMode, saveControlMode } from './storage.js';
+import { createDerivedViews } from './derived.js';
+import {
+  loadGrid,
+  saveGrid,
+  loadCamera,
+  saveCamera,
+  loadHistory,
+  saveHistory,
+  clearHistory,
+  loadControlMode,
+  saveControlMode,
+} from './storage.js';
+import { createBuildMode } from './buildmode.js';
 import { UndoStack } from './history.js';
 import { createRetroRenderer, snapScene } from './retro.js';
 import { createDayNight, DEFAULT_TIME } from './daynight.js';
@@ -74,7 +83,7 @@ controls.minDistance = 4;
 controls.maxDistance = SIZE * 4;
 controls.maxPolarAngle = Math.PI / 2 - 0.05;
 
-/** @type {'earth' | 'tools'} */
+/** @type {'earth' | 'tools' | 'build'} */
 let controlMode = loadControlMode('earth');
 // Which 1/2/3 nav key is held in tools mode. Only one action is active;
 // priority is orbit > zoom > pan if several are down.
@@ -91,7 +100,7 @@ function toolNavAction() {
 }
 
 function applyControlMode() {
-  if (controlMode === 'earth') {
+  if (controlMode === 'earth' || controlMode === 'build') {
     controls.mouseButtons = {
       LEFT: THREE.MOUSE.PAN,
       MIDDLE: THREE.MOUSE.DOLLY,
@@ -112,13 +121,17 @@ function applyControlMode() {
   // Rotate is always custom (cursor-pivot); never hand it to OrbitControls.
   controls.enableRotate = false;
   const earth = controlMode === 'earth';
+  const tools = controlMode === 'tools';
+  const building = controlMode === 'build';
   document.getElementById('mode-earth-btn').setAttribute('aria-pressed', String(earth));
-  document.getElementById('mode-tools-btn').setAttribute('aria-pressed', String(!earth));
+  document.getElementById('mode-tools-btn').setAttribute('aria-pressed', String(tools));
+  document.getElementById('mode-build-btn').setAttribute('aria-pressed', String(building));
   document.getElementById('hud-keys-earth').hidden = !earth;
-  document.getElementById('hud-keys-tools').hidden = earth;
+  document.getElementById('hud-keys-tools').hidden = !tools;
+  document.getElementById('hud-keys-build').hidden = !building;
+  buildMode.setActive(building);
 }
 
-applyControlMode();
 loadCamera(camera, controls);
 // Poses saved before cursor-pivot orbit may have a raised target; snap back
 // to the water plane on load. Pan stays horizontal (screenSpacePanning off);
@@ -165,34 +178,29 @@ gridHelper.material.transparent = true;
 gridHelper.material.opacity = 0.35;
 scene.add(gridHelper);
 
-// ---------- Terrain ----------
+// ---------- Grid + derived views ----------
 const grid = new VoxelGrid(SIZE, HEIGHT);
 const undoStack = new UndoStack();
 if (loadGrid(grid)) loadHistory(undoStack, grid);
 else clearHistory();
-const terrainMaterial = createTerrainMaterial();
-let terrain = new THREE.Mesh(buildSmoothTerrainGeometry(grid), terrainMaterial);
-terrain.castShadow = true;
-terrain.receiveShadow = true;
-scene.add(terrain);
-// Second pass that shows the terrain just below the waterline through the
-// opaque water (see terrainmaterial.js).
-const terrainOverlay = createSubmergedOverlay(terrain);
-scene.add(terrainOverlay);
-// Trees are derived from the grid too (see trees.js) and rebuilt with it.
-const trees = new THREE.Mesh(buildTreesGeometry(grid), createTreeMaterial());
-trees.castShadow = true;
-trees.receiveShadow = true;
-scene.add(trees);
+// Terrain, submerged overlay, trees, shore map — see derived.js.
+const derived = createDerivedViews({ grid, water });
+const { terrain } = derived;
+scene.add(derived.terrain, derived.overlay, derived.trees);
 
-function rebuildTerrain() {
-  terrain.geometry.dispose();
-  terrain.geometry = buildSmoothTerrainGeometry(grid);
-  terrainOverlay.geometry = terrain.geometry;
-  trees.geometry.dispose();
-  trees.geometry = buildTreesGeometry(grid);
-  water.updateShore(grid);
-}
+// Placement, selection, extrusion, and building undo. Orbit stays here.
+const buildMode = createBuildMode({
+  scene,
+  camera,
+  domElement: renderer.domElement,
+  controls,
+  terrain,
+  waterMesh: water.mesh,
+  snapScene,
+  dragThreshold: DRAG_THRESHOLD_PX,
+});
+
+applyControlMode();
 
 function persist() {
   saveGrid(grid);
@@ -205,7 +213,7 @@ function applyHistory(entry, towardBefore) {
   for (const c of cells) {
     grid.set(c.x, c.y, c.z, towardBefore ? c.before : c.after);
   }
-  rebuildTerrain();
+  derived.rebuild(grid);
   persist();
   updateGhost(lastPointer.x, lastPointer.y, ghostOpts());
 }
@@ -237,7 +245,7 @@ function clearIsland() {
   }
   if (!cells.length) return;
   undoStack.pushBatch(cells);
-  rebuildTerrain();
+  derived.rebuild(grid);
   persist();
   updateGhost(lastPointer.x, lastPointer.y, ghostOpts());
 }
@@ -340,6 +348,12 @@ function setCursor(base, normal, remove) {
 }
 
 function updateGhost(clientX, clientY, { paint = false, remove = false } = {}) {
+  if (controlMode === 'build') {
+    cursor.visible = false;
+    buildMode.updateHover(clientX, clientY);
+    return;
+  }
+  buildMode.hideGhost();
   const { cell, target, normal, base } = pick(clientX, clientY);
   const showRemove = remove && cell;
   const showAdd = paint && !remove && target;
@@ -413,7 +427,7 @@ function tryPaintAt(clientX, clientY) {
     paintStroke.lnz = nz;
   }
 
-  rebuildTerrain();
+  derived.rebuild(grid);
   saveGrid(grid);
 }
 
@@ -453,6 +467,7 @@ function syncMods(e) {
 }
 
 function ghostOpts() {
+  if (controlMode === 'build') return {};
   if (paintStroke) {
     return { paint: !paintStroke.erase, remove: paintStroke.erase };
   }
@@ -597,6 +612,17 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
   syncMods(e);
   pointerDown = { x: e.clientX, y: e.clientY };
 
+  if (controlMode === 'build') {
+    if (e.button === 0 && e.shiftKey) {
+      pickOrbitPivot(e.clientX, e.clientY, orbitPivot);
+      orbitArmed = true;
+      orbitDragging = false;
+      orbitLastX = e.clientX;
+      orbitLastY = e.clientY;
+    }
+    return;
+  }
+
   if (controlMode === 'tools') {
     if (toolKeys.orbit) {
       // 3 + left-drag: same cursor-pivot orbit as Earth shift-drag.
@@ -638,6 +664,7 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
 renderer.domElement.addEventListener('pointermove', (e) => {
   syncMods(e);
   lastPointer = { x: e.clientX, y: e.clientY };
+  if (buildMode.pointerMove(e)) return;
   if (paintStroke) {
     const held = paintStroke.erase ? 2 : 1; // right vs left button bit
     if ((e.buttons & held) !== 0) {
@@ -672,6 +699,11 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   if (paintStroke && ((paintStroke.erase && e.button === 2) || (!paintStroke.erase && e.button === 0))) {
     endPaint();
   }
+  if (buildMode.pointerUp(e, pointerDown)) {
+    pointerDown = null;
+    updateGhost(e.clientX, e.clientY, ghostOpts());
+    return;
+  }
   if (orbitArmed && e.button === 0) {
     orbitArmed = false;
     orbitDragging = false;
@@ -685,8 +717,9 @@ renderer.domElement.addEventListener('pointerup', (e) => {
 // (2-drag zoom): button-up outside the window may never hit the canvas
 // listener, leaving LEFT stuck on DOLLY. Window-level up/cancel always ends us.
 function endNavPointer() {
-  const hadGesture = pointerDown || paintStroke || orbitArmed;
+  const hadGesture = pointerDown || paintStroke || orbitArmed || buildMode.isDragging();
   if (paintStroke) endPaint();
+  buildMode.cancel();
   orbitArmed = false;
   orbitDragging = false;
   if (!hadGesture) return;
@@ -701,8 +734,9 @@ window.addEventListener('pointercancel', endNavPointer);
 renderer.domElement.addEventListener('lostpointercapture', endNavPointer);
 
 renderer.domElement.addEventListener('pointerleave', () => {
-  // Don't clear pointerDown — a captured 1/2-drag still owns the gesture until
-  // pointerup. Only hide the paint ghost while the cursor is off the canvas.
+  // Don't clear pointerDown — a captured drag still owns the gesture until
+  // pointerup. Only hide the placement previews while the cursor is off the canvas.
+  buildMode.hideGhost();
   cursor.visible = false;
 });
 
@@ -719,7 +753,10 @@ window.addEventListener('keydown', (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z' && !e.altKey) {
     e.preventDefault();
     if (paintStroke) return; // don't undo mid-stroke
-    if (e.shiftKey) redo();
+    if (controlMode === 'build') {
+      if (e.shiftKey) buildMode.redo();
+      else buildMode.undo();
+    } else if (e.shiftKey) redo();
     else undo();
     return;
   }
@@ -750,7 +787,9 @@ window.addEventListener('blur', () => {
   orbitArmed = false;
   orbitDragging = false;
   pointerDown = null;
+  buildMode.cancel();
   if (controlMode === 'tools') applyControlMode();
+  buildMode.hideGhost();
   cursor.visible = false;
 });
 
@@ -768,7 +807,7 @@ for (const el of document.querySelectorAll('[data-mod-shift]')) el.textContent =
 for (const el of document.querySelectorAll('[data-mod-z]')) el.textContent = `${mod}Z`;
 
 function setControlMode(mode) {
-  if (mode !== 'earth' && mode !== 'tools') return;
+  if (mode !== 'earth' && mode !== 'tools' && mode !== 'build') return;
   if (paintStroke) endPaint();
   orbitArmed = false;
   orbitDragging = false;
@@ -784,6 +823,7 @@ function setControlMode(mode) {
 
 document.getElementById('mode-earth-btn').addEventListener('click', () => setControlMode('earth'));
 document.getElementById('mode-tools-btn').addEventListener('click', () => setControlMode('tools'));
+document.getElementById('mode-build-btn').addEventListener('click', () => setControlMode('build'));
 
 document.getElementById('grid-btn').addEventListener('click', (e) => {
   gridHelper.visible = !gridHelper.visible;
@@ -796,7 +836,6 @@ timeSlider.value = String(DEFAULT_TIME);
 timeSlider.addEventListener('input', () => dayNight.setTime(Number(timeSlider.value)));
 
 // ---------- Loop ----------
-rebuildTerrain();
 // Everything is in the scene now; give every material the PS1 vertex wobble.
 snapScene(scene);
 const clock = new THREE.Clock();

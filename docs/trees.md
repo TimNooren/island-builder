@@ -6,10 +6,11 @@ Why trees are placed and drawn the way they are.
 
 Trees are a function of the `VoxelGrid`, like the terrain mesh and the shore
 map: `buildTreesGeometry(grid)` runs after every edit (~5 ms for ~50 trees)
-and nothing about them is saved. This keeps the data model a plain grid of
-cells and means undo/redo, storage and picking are untouched. The cost is
-that a tree cannot be placed or removed by hand; it comes and goes with the
-lawn it stands on.
+via `derived.rebuild` in `derived.js`, and nothing about them is saved. This
+keeps the data model a plain grid of cells and means undo/redo, storage and
+picking are untouched. The cost is that a tree cannot be placed or removed by
+hand; it comes and goes with the lawn it stands on. To tear trees out, drop
+them from `derived.js` — edit sites never name them.
 
 ## Where they grow (`src/trees.js`)
 

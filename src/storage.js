@@ -13,10 +13,11 @@ const STORAGE_KEY = 'island-builder:grid';
 const CAMERA_KEY = 'island-builder:camera';
 const HISTORY_KEY = 'island-builder:history';
 const CONTROL_MODE_KEY = 'island-builder:control-mode';
+const BUILDINGS_KEY = 'island-builder:buildings';
 const FORMAT_VERSION = 1;
 
-/** @typedef {'earth' | 'tools'} ControlMode */
-const CONTROL_MODES = new Set(['earth', 'tools']);
+/** @typedef {'earth' | 'tools' | 'build'} ControlMode */
+const CONTROL_MODES = new Set(['earth', 'tools', 'build']);
 
 function encodeRuns(data) {
   const runs = [];
@@ -223,4 +224,43 @@ export function loadControlMode(fallback = 'earth') {
     // Storage unavailable; see saveGrid.
   }
   return CONTROL_MODES.has(fallback) ? fallback : 'earth';
+}
+
+export function saveBuildings(payload) {
+  try {
+    localStorage.setItem(
+      BUILDINGS_KEY,
+      JSON.stringify({
+        v: FORMAT_VERSION,
+        ...payload,
+      })
+    );
+  } catch {
+    // Storage unavailable; see saveGrid.
+  }
+}
+
+/**
+ * Read buildings from storage. Returns a validated payload or null.
+ * @returns {{ buildings: object[], nextId: number } | null}
+ */
+export function loadBuildings() {
+  try {
+    const raw = localStorage.getItem(BUILDINGS_KEY);
+    if (!raw) return null;
+    const payload = JSON.parse(raw);
+    if (!payload || payload.v !== FORMAT_VERSION || !Array.isArray(payload.buildings)) return null;
+    if (!Number.isInteger(payload.nextId) || payload.nextId < 1) return null;
+    return { buildings: payload.buildings, nextId: payload.nextId };
+  } catch {
+    return null;
+  }
+}
+
+export function clearBuildingsStorage() {
+  try {
+    localStorage.removeItem(BUILDINGS_KEY);
+  } catch {
+    // Storage unavailable; see saveGrid.
+  }
 }

@@ -35,7 +35,7 @@ canvas {
 
 .hud-modes {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 6px;
   margin: 0 0 8px;
 }
