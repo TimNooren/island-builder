@@ -25,8 +25,8 @@ disturbance to the actual game as possible.
 
 ## What we do
 
-All of it lives in `src/retro.js`, apart from the texel snapping and flat
-shading in `src/terrainmaterial.js`.
+All of it lives in `src/retro.js`, apart from the texel snapping and the
+softened facets in `src/terrainmaterial.js`.
 
 **Low internal resolution.** The scene renders into a `WebGLRenderTarget`
 about `TARGET_HEIGHT` (240) rows tall and is drawn to the window with nearest
@@ -56,11 +56,25 @@ the distance.
 `COLOR_BITS` (5) with a 4×4 Bayer threshold, in sRGB space, indexed by
 low-res pixel so the pattern is one texel wide.
 
-**Flat shading.** `MeshStandardMaterial({ flatShading: true })` on the terrain.
-The smoothed Marching Cubes mesh has one vertex per cell; with smooth normals
-it reads as a rounded blob, with flat normals as a low-poly model. The grass
-slope test in the fragment shader still uses the smooth per-vertex world
-normal, otherwise the grass border would flip per facet.
+**Softened facets.** The hardware lit each polygon with one flat shade, or
+with Gouraud across its vertices. Hard flat shading (`flatShading: true`)
+did the first of those, and it was too much: the smoothed Marching Cubes
+mesh has large triangles, so every bevel read as its own tile. Full smooth
+normals go the other way and turn the same mesh into a rounded blob.
+
+`FACET_SOFTNESS` (0.75) is the mix between them. `flatShading` stays off, so
+three still interpolates the vertex normal. After `<normal_fragment_begin>`,
+`SOFTEN_FACETS_GLSL` builds the flat normal from screen-space derivatives,
+flips it if it points against the vertex normal (some windings come out
+backwards), and mixes the two. 0 is one shade per triangle; 1 is the rounded
+look. The grass slope test still uses the smooth per-vertex world normal
+from the vertex shader, so the border follows the overall slope instead of
+the lighting normal.
+
+Trees share that snippet (`createTreeMaterial` in `trees.js`). Shading alone
+does not round a silhouette, so the trunk and canopy are a step finer than
+the original chunky PS1 mesh: `TRUNK_SEGMENTS` 8 and `CANOPY_DETAIL` 2 in
+`treemodel.js`. Higher mostly disappears into the 240-row pixel grid.
 
 **Texel-snapped procedural textures.** The terrain's grass noise and border
 wobble are sampled at positions rounded to `TEXELS_PER_UNIT` (8) per world
@@ -86,7 +100,7 @@ maps off (`SHADOWS` constant), fog pulled in from `[3·SIZE, 8·SIZE]` to
 - **Interlace / 480i shimmer.** Same reasoning.
 - **Gouraud instead of per-pixel lighting.** three's Lambert and Standard
   materials both light per pixel now; at 240 rows the difference is
-  invisible, and flat shading covers the "one value per polygon" look.
+  invisible. How faceted the shading looks is `FACET_SOFTNESS`.
 
 ## Knobs
 
@@ -97,7 +111,8 @@ maps off (`SHADOWS` constant), fog pulled in from `[3·SIZE, 8·SIZE]` to
 | `COLOR_BITS` | `retro.js` | Bits per channel; 5 is PS1, 4 shows the dither more. |
 | `SHADOWS` | `main.js` | Re-enable shadow maps for a modern look. |
 | `TEXELS_PER_UNIT` | `terrainmaterial.js` | Coarseness of the fake texture. |
-| `flatShading` | `terrainmaterial.js` | Set false for the previous rounded look. |
+| `FACET_SOFTNESS` | `terrainmaterial.js` | 0 is hard facets, 1 is the rounded look. Trees share the mix. |
+| `TRUNK_SEGMENTS`, `CANOPY_DETAIL` | `treemodel.js` | Tree silhouette. Shading does not round the outline. |
 
 To go back to the modern look entirely: `renderer.render(scene, camera)` in
 the loop instead of `retro.render`, drop `snapScene(scene)`, and set

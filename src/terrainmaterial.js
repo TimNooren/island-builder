@@ -55,6 +55,11 @@ const EDGE_NOISE_FREQ = 0.7;
 // tile) rather than smooth per-pixel noise. Higher is finer and eventually
 // indistinguishable from smooth; 4 is visibly blocky at the default zoom.
 const TEXELS_PER_UNIT = 8;
+// How far lighting follows the smoothed vertex normal instead of the
+// triangle's flat normal. 0 is a hard shade per facet (the low-poly read);
+// 1 lets the light follow the rounded mesh. The silhouette is unchanged.
+// Trees use the same mix via SOFTEN_FACETS_GLSL.
+const FACET_SOFTNESS = 0.75;
 // Grass texture: brightness swing of the noise, in fraction of colour. The
 // texel look needs a bit more contrast than smooth noise did to register.
 const GRASS_TEX_STRENGTH = 0.34;
@@ -171,10 +176,22 @@ const FRAGMENT_BODY = /* glsl */ `
 }
 `;
 
+// Blend the flat face normal toward the interpolated one. The derivative
+// normal can come out flipped relative to the vertex normal on some windings;
+// the dot product puts them in the same hemisphere before the mix.
+export const SOFTEN_FACETS_GLSL = /* glsl */ `
+{
+  vec3 facetNormal = normalize(cross(dFdx(vViewPosition), dFdy(vViewPosition)));
+  if (dot(facetNormal, normal) < 0.0) facetNormal = -facetNormal;
+  normal = normalize(mix(facetNormal, normal, ${FACET_SOFTNESS.toFixed(4)}));
+}
+`;
+
 // Submerged pixels are lit as if they faced straight up, like the surface.
 // Runs after three has derived the view-space normal, before lighting.
 const FRAGMENT_NORMAL = /* glsl */ `
 #include <normal_fragment_begin>
+${SOFTEN_FACETS_GLSL}
 normal = mix(normal, normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz), gSubmerged);
 `;
 
@@ -184,12 +201,10 @@ normal = mix(normal, normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz), gSu
  *   instead of the normal opaque terrain material.
  */
 export function createTerrainMaterial({ submergedOverlay = false } = {}) {
-  // Flat shading: one lighting value per triangle, so the Marching Cubes
-  // facets show through the smoothing and the island reads as a low-poly
-  // model rather than a rounded blob. The world normal used for the grass
-  // slope test below stays the smooth per-vertex one, so the border still
-  // follows the overall slope instead of flipping per facet.
-  const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, flatShading: true });
+  // Smooth vertex normals (flatShading stays off) so SOFTEN_FACETS_GLSL can
+  // mix them with the per-triangle normal. The grass slope test uses the
+  // smooth object normal from the vertex shader, not this lighting normal.
+  const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 });
   if (submergedOverlay) {
     material.transparent = true;
     material.depthWrite = false;

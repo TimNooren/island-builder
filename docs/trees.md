@@ -59,9 +59,10 @@ icosahedron move together and the blob stays closed. The underside is baked
 darker for cheap contact shading.
 
 Trees are non-indexed geometries with `position`/`normal`/`color`, appended
-into one buffer and drawn with one flat-shaded, vertex-coloured
-`MeshStandardMaterial`. The mesh is created before `snapScene()` so it gets
-the PS1 vertex snapping; only its geometry is swapped on rebuild.
+into one buffer and drawn with one vertex-coloured `MeshStandardMaterial`
+whose facets are softened the same way as the terrain. The mesh is created
+before `snapScene()` so it gets the PS1 vertex snapping; only its geometry
+is swapped on rebuild.
 
 Rejected: `InstancedMesh` (per-instance scale can't vary trunk vs canopy
 proportions, and one draw call is already what the merge gives us), and

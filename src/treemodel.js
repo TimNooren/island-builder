@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 
 /**
- * One cartoon tree: a short faceted trunk with a lumpy low-poly canopy on
- * top, built as a single BufferGeometry with per-vertex colours so any
- * number of trees can be merged into one mesh and one material.
+ * One cartoon tree: a short trunk with a lumpy canopy on top, built as a
+ * single BufferGeometry with per-vertex colours so any number of trees can
+ * be merged into one mesh and one material.
  *
  * Everything about the shape is a parameter (see DEFAULTS). The model sits
  * on the origin: y = 0 is ground level, the trunk extends a little below it
@@ -11,11 +11,12 @@ import * as THREE from 'three';
  * canopy's top is at exactly `height`.
  */
 
-// Segments around the trunk / subdivision of the canopy sphere. 5 and 1 give
-// the chunky PS1 silhouette; higher looks smoother but no less blocky once
-// flat-shaded, and the vertex count of a full island of trees adds up.
-const TRUNK_SEGMENTS = 5;
-const CANOPY_DETAIL = 1;
+// Segments around the trunk / subdivision of the canopy sphere. 8 and 2 keep
+// a slightly chunky silhouette at the low internal resolution without each
+// face reading as its own tile. Higher mostly disappears into the pixel grid;
+// the vertex count of a full island of trees adds up.
+const TRUNK_SEGMENTS = 8;
+const CANOPY_DETAIL = 2;
 // How far the trunk continues below ground level, so the base is hidden even
 // where the smoothed terrain dips a little under the nominal cell top.
 const ROOT_DEPTH = 0.15;

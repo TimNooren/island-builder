@@ -98,40 +98,88 @@ export function pickExtrudeHandle(raycaster, gizmo) {
   };
 }
 
-const _camDir = new THREE.Vector3();
-const _planeNormal = new THREE.Vector3();
-const _hit = new THREE.Vector3();
+const _ndcA = new THREE.Vector3();
+const _ndcB = new THREE.Vector3();
+const _viewAxis = new THREE.Vector3();
+
+// One world unit along a steeply foreshortened arrow can cover only a pixel
+// or two. Tracking that 1:1 turns a tiny nudge into a size clamp (the face
+// "jumps to zero"). Never move faster than this many pixels per world unit.
+const MIN_PX_PER_UNIT = 8;
+// Shorter than this, the arrow is a dot — looking down its shaft — and the
+// projected direction is noise. Use screen-up instead.
+const SPECK_PX = 1;
+
+/** Pixels covered by one world unit along `axis` through `origin`. */
+function axisScreenPerUnit(camera, origin, axis, viewport) {
+  _ndcA.copy(origin).project(camera);
+  _ndcB.copy(origin).add(axis).project(camera);
+  return {
+    x: (_ndcB.x - _ndcA.x) * 0.5 * viewport.innerWidth,
+    y: -(_ndcB.y - _ndcA.y) * 0.5 * viewport.innerHeight,
+  };
+}
+
+/** World size of one pixel on a camera-facing surface at `point`. */
+function worldUnitsPerPixel(camera, point, viewportHeight) {
+  const dist = Math.max(camera.position.distanceTo(point), 1e-3);
+  const visibleHeight = 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5) * dist;
+  return visibleHeight / viewportHeight;
+}
 
 /**
- * Begin an extrusion drag: returns state to track until pointerup, or null.
+ * Screen direction of the extrusion, in pixels per world unit.
+ * Fixed for the whole gesture so the sign can't flip as the pointer moves.
+ */
+function dragAxisPixels(camera, origin, axis, viewport) {
+  camera.updateMatrixWorld();
+  const per = axisScreenPerUnit(camera, origin, axis, viewport);
+  const len = Math.hypot(per.x, per.y);
+  const pxPerUnit = 1 / worldUnitsPerPixel(camera, origin, viewport.innerHeight);
+  // Cap amplification from foreshortening, but keep the full on-screen
+  // length when the arrow is already easy to see.
+  const floor = Math.max(MIN_PX_PER_UNIT, pxPerUnit * 0.35);
+
+  if (len >= floor) return per;
+
+  if (len < SPECK_PX) {
+    // +Z in view space points back at the camera. Dragging up extrudes
+    // outward when the arrow points toward the viewer.
+    _viewAxis.copy(axis).transformDirection(camera.matrixWorldInverse);
+    return { x: 0, y: _viewAxis.z >= 0 ? -pxPerUnit : pxPerUnit };
+  }
+
+  const s = floor / len;
+  return { x: per.x * s, y: per.y * s };
+}
+
+/**
+ * Begin an extrusion drag: returns state to track until pointerup.
+ * The pointer delta is projected onto the arrow's screen direction. A drag
+ * plane that contains the view ray is edge-on, so the hit flies to infinity
+ * and the size clamps to the minimum mid-gesture.
  * @param {{ x: number, y: number, z: number, sx: number, sy: number, sz: number }} startBox
  */
-export function beginExtrudeDrag(clientX, clientY, handle, startBox, camera, raycaster, pointerNdc, window) {
-  const normal = handle.normal;
-  camera.getWorldDirection(_camDir);
-  _planeNormal.crossVectors(normal, _camDir);
-  if (_planeNormal.lengthSq() < 1e-8) _planeNormal.crossVectors(normal, camera.up);
-  _planeNormal.normalize();
-
-  const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(_planeNormal, handle.point);
-  pointerNdc.set((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
-  raycaster.setFromCamera(pointerNdc, camera);
-  if (!raycaster.ray.intersectPlane(plane, _hit)) return null;
-
+export function beginExtrudeDrag(clientX, clientY, handle, startBox, camera, viewport) {
+  const axisPx = dragAxisPixels(camera, handle.point, handle.normal, viewport);
   return {
-    normal: normal.clone(),
-    plane,
-    startAlong: _hit.dot(normal),
+    normal: handle.normal.clone(),
+    startX: clientX,
+    startY: clientY,
+    axisPxX: axisPx.x,
+    axisPxY: axisPx.y,
     startBox: { ...startBox },
   };
 }
 
 /** Apply drag delta to the start box; returns the new box state. */
-export function extrudeFromDrag(drag, clientX, clientY, camera, raycaster, pointerNdc, window) {
-  pointerNdc.set((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
-  raycaster.setFromCamera(pointerNdc, camera);
-  if (!raycaster.ray.intersectPlane(drag.plane, _hit)) return null;
-  const delta = _hit.dot(drag.normal) - drag.startAlong;
+export function extrudeFromDrag(drag, clientX, clientY) {
+  const dx = clientX - drag.startX;
+  const dy = clientY - drag.startY;
+  const denom = drag.axisPxX * drag.axisPxX + drag.axisPxY * drag.axisPxY;
+  if (denom < 1e-8) return null;
+  const delta = (dx * drag.axisPxX + dy * drag.axisPxY) / denom;
+  if (!Number.isFinite(delta)) return null;
   return applyExtrude(drag.startBox, drag.normal, delta);
 }
 

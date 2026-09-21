@@ -60,7 +60,7 @@ export function createBuildMode({
   const raycaster = new THREE.Raycaster();
   const pointerNdc = new THREE.Vector2();
 
-  /** @type {{ id: number, before: object, normal: THREE.Vector3, plane: THREE.Plane, startAlong: number, startBox: object } | null} */
+  /** @type {{ id: number, before: object, normal: THREE.Vector3, startX: number, startY: number, axisPxX: number, axisPxY: number, startBox: object } | null} */
   let extrudeDrag = null;
   let active = false;
   // Preview colour for the next placement — stable until a cube is placed.
@@ -216,7 +216,7 @@ export function createBuildMode({
     const handle = pickExtrudeHandle(raycaster, extrudeGizmo);
     if (!handle) return;
     const sel = buildingStore.selected;
-    const drag = beginExtrudeDrag(e.clientX, e.clientY, handle, cloneBuilding(sel), camera, raycaster, pointerNdc, window);
+    const drag = beginExtrudeDrag(e.clientX, e.clientY, handle, cloneBuilding(sel), camera, window);
     if (!drag) return;
     extrudeDrag = { id: sel.id, before: cloneBuilding(sel), ...drag };
     controls.enabled = false;
@@ -233,7 +233,7 @@ export function createBuildMode({
 
   function pointerMove(e) {
     if (!extrudeDrag || (e.buttons & 1) === 0) return false;
-    const next = extrudeFromDrag(extrudeDrag, e.clientX, e.clientY, camera, raycaster, pointerNdc, window);
+    const next = extrudeFromDrag(extrudeDrag, e.clientX, e.clientY);
     if (next) {
       buildingStore.setBox(extrudeDrag.id, next);
       syncBuildingsMeshes(buildingsRoot, buildingStore, true);

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { ISO, cellFill, cellHash } from './field.js';
-import { GRASS_EDGE_HEIGHT } from './terrainmaterial.js';
+import { GRASS_EDGE_HEIGHT, SOFTEN_FACETS_GLSL } from './terrainmaterial.js';
 import { GRASS_LIFT } from './terrainmesh.js';
 import { createTreeGeometry, canopyHalfHeight, concat } from './treemodel.js';
 
@@ -209,7 +209,15 @@ export function buildTreesGeometry(grid) {
   return concat(parts);
 }
 
-/** Shares the terrain's flat-shaded, vertex-coloured look. */
+/** Vertex-coloured, with the same softened facets as the terrain. */
 export function createTreeMaterial() {
-  return new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, flatShading: true });
+  const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95 });
+  material.customProgramCacheKey = () => 'trees';
+  material.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      '#include <normal_fragment_begin>',
+      `#include <normal_fragment_begin>\n${SOFTEN_FACETS_GLSL}`
+    );
+  };
+  return material;
 }
