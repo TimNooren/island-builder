@@ -12,7 +12,11 @@
 const STORAGE_KEY = 'island-builder:grid';
 const CAMERA_KEY = 'island-builder:camera';
 const HISTORY_KEY = 'island-builder:history';
+const CONTROL_MODE_KEY = 'island-builder:control-mode';
 const FORMAT_VERSION = 1;
+
+/** @typedef {'earth' | 'tools'} ControlMode */
+const CONTROL_MODES = new Set(['earth', 'tools']);
 
 function encodeRuns(data) {
   const runs = [];
@@ -193,4 +197,30 @@ export function loadCamera(camera, controls) {
   } catch {
     return false;
   }
+}
+
+/** Persist which camera/paint control scheme is active. */
+export function saveControlMode(mode) {
+  try {
+    if (!CONTROL_MODES.has(mode)) return;
+    localStorage.setItem(CONTROL_MODE_KEY, mode);
+  } catch {
+    // Storage unavailable; see saveGrid.
+  }
+}
+
+/**
+ * Restore the control scheme. Returns the saved mode, or `fallback` when
+ * nothing valid is stored.
+ * @param {ControlMode} [fallback='earth']
+ * @returns {ControlMode}
+ */
+export function loadControlMode(fallback = 'earth') {
+  try {
+    const mode = localStorage.getItem(CONTROL_MODE_KEY);
+    if (CONTROL_MODES.has(mode)) return mode;
+  } catch {
+    // Storage unavailable; see saveGrid.
+  }
+  return CONTROL_MODES.has(fallback) ? fallback : 'earth';
 }

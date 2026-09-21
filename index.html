@@ -8,11 +8,23 @@
   </head>
   <body>
     <aside id="hud" class="hud" aria-label="Controls">
-      <dl class="hud-keys">
+      <div class="hud-modes" role="group" aria-label="Control mode">
+        <button type="button" id="mode-earth-btn" class="hud-btn" aria-pressed="true">Earth</button>
+        <button type="button" id="mode-tools-btn" class="hud-btn" aria-pressed="false">1-2-3</button>
+      </div>
+      <dl class="hud-keys" id="hud-keys-earth">
         <div><dt>drag</dt><dd>pan</dd></div>
         <div><dt>⇧ drag</dt><dd>orbit</dd></div>
         <div><dt data-mod>⌘ drag</dt><dd>paint</dd></div>
         <div><dt data-mod-shift>⌘⇧ drag</dt><dd>erase</dd></div>
+        <div><dt data-mod-z>⌘Z</dt><dd>undo</dd></div>
+      </dl>
+      <dl class="hud-keys" id="hud-keys-tools" hidden>
+        <div><dt>click</dt><dd>paint</dd></div>
+        <div><dt>right-click</dt><dd>erase</dd></div>
+        <div><dt>1 drag</dt><dd>pan</dd></div>
+        <div><dt>2 drag</dt><dd>zoom</dd></div>
+        <div><dt>3 drag</dt><dd>orbit</dd></div>
         <div><dt data-mod-z>⌘Z</dt><dd>undo</dd></div>
       </dl>
       <label class="hud-time">

@@ -5,7 +5,7 @@ import { buildSmoothTerrainGeometry } from './terrainmesh.js';
 import { createTerrainMaterial, createSubmergedOverlay } from './terrainmaterial.js';
 import { createWater, WATER_LEVEL } from './water.js';
 import { buildTreesGeometry, createTreeMaterial } from './trees.js';
-import { loadGrid, saveGrid, loadCamera, saveCamera, loadHistory, saveHistory, clearHistory } from './storage.js';
+import { loadGrid, saveGrid, loadCamera, saveCamera, loadHistory, saveHistory, clearHistory, loadControlMode, saveControlMode } from './storage.js';
 import { UndoStack } from './history.js';
 import { createRetroRenderer, snapScene } from './retro.js';
 import { createDayNight, DEFAULT_TIME } from './daynight.js';
@@ -47,7 +47,9 @@ const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerH
 camera.position.set(SIZE * 1.1, SIZE * 0.9, SIZE * 1.1);
 retro.setSize(window.innerWidth, window.innerHeight, camera);
 
-// Google-Earth-ish camera, Townscaper-ish edit:
+// Two control schemes (toggle in the HUD; preference is persisted):
+//
+// Earth (Google-Earth-ish camera, modifier paint):
 //   left / right drag          pan
 //   shift + left drag          orbit around the raycast hit (off-centre ok)
 //   cmd/ctrl + left drag       paint add (cell-change; no pan)
@@ -55,14 +57,15 @@ retro.setSize(window.innerWidth, window.innerHeight, camera);
 // OrbitControls must not rotate: with LEFT mapped to PAN it treats any
 // modifier+left as ROTATE around the look-at target — the wrong pivot. That
 // swap is also what blocks pan while cmd/ctrl is held (rotate is disabled).
+//
+// 1-2-3 (DCC-style nav, free paint) — same camera feel as Earth:
+//   left drag / click          paint add
+//   right drag / click         paint erase
+//   1 + drag                   pan   (same as Earth drag)
+//   2 + drag                   zoom  (pointer drag only — no wheel/trackpad)
+//   3 + drag                   orbit (same cursor-pivot as Earth ⇧ drag)
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(SIZE / 2, WATER_LEVEL, SIZE / 2);
-controls.mouseButtons = {
-  LEFT: THREE.MOUSE.PAN,
-  MIDDLE: THREE.MOUSE.DOLLY,
-  RIGHT: THREE.MOUSE.PAN,
-};
-controls.enableRotate = false;
 controls.screenSpacePanning = false;
 controls.zoomToCursor = true;
 controls.enableDamping = true;
@@ -70,6 +73,52 @@ controls.dampingFactor = 0.12;
 controls.minDistance = 4;
 controls.maxDistance = SIZE * 4;
 controls.maxPolarAngle = Math.PI / 2 - 0.05;
+
+/** @type {'earth' | 'tools'} */
+let controlMode = loadControlMode('earth');
+// Which 1/2/3 nav key is held in tools mode. Only one action is active;
+// priority is orbit > zoom > pan if several are down.
+const toolKeys = { pan: false, zoom: false, orbit: false };
+// Shared with the pointer handlers below; declared early so mode switches can
+// avoid remapping OrbitControls mid-gesture.
+let pointerDown = null; // { x, y } — orbit arm position for the drag threshold
+
+function toolNavAction() {
+  if (toolKeys.orbit) return THREE.MOUSE.ROTATE;
+  if (toolKeys.zoom) return THREE.MOUSE.DOLLY;
+  if (toolKeys.pan) return THREE.MOUSE.PAN;
+  return null;
+}
+
+function applyControlMode() {
+  if (controlMode === 'earth') {
+    controls.mouseButtons = {
+      LEFT: THREE.MOUSE.PAN,
+      MIDDLE: THREE.MOUSE.DOLLY,
+      RIGHT: THREE.MOUSE.PAN,
+    };
+  } else {
+    // Sync LEFT to the current nav keys. OrbitControls latches its action on
+    // pointerdown, so a mid-drag remap only affects the next gesture — and we
+    // must still clear DOLLY/PAN on keyup even if the pointer left the canvas
+    // (otherwise LEFT stays bound and "zoom mode" never releases).
+    const action = toolNavAction();
+    controls.mouseButtons = {
+      LEFT: action === THREE.MOUSE.ROTATE ? null : action,
+      MIDDLE: null,
+      RIGHT: null,
+    };
+  }
+  // Rotate is always custom (cursor-pivot); never hand it to OrbitControls.
+  controls.enableRotate = false;
+  const earth = controlMode === 'earth';
+  document.getElementById('mode-earth-btn').setAttribute('aria-pressed', String(earth));
+  document.getElementById('mode-tools-btn').setAttribute('aria-pressed', String(!earth));
+  document.getElementById('hud-keys-earth').hidden = !earth;
+  document.getElementById('hud-keys-tools').hidden = earth;
+}
+
+applyControlMode();
 loadCamera(camera, controls);
 // Poses saved before cursor-pivot orbit may have a raised target; snap back
 // to the water plane on load. Pan stays horizontal (screenSpacePanning off);
@@ -390,7 +439,6 @@ function endPaint() {
 }
 
 // ---------- Input ----------
-let pointerDown = null; // { x, y } — orbit arm position for the drag threshold
 let lastPointer = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
 // Latest modifier state from key/pointer events (keyup clears meta/ctrl reliably).
 let mods = { shift: false, paintAdd: false, paintErase: false };
@@ -398,14 +446,20 @@ let mods = { shift: false, paintAdd: false, paintErase: false };
 function syncMods(e) {
   const cmd = e.metaKey || e.ctrlKey;
   mods.shift = e.shiftKey;
-  // Cmd = paint add; cmd+shift = paint erase. Shift alone is orbit.
-  mods.paintAdd = cmd && !e.shiftKey;
-  mods.paintErase = cmd && e.shiftKey;
+  // Earth: cmd = paint add; cmd+shift = paint erase. Shift alone is orbit.
+  // Tools: left/right clicks paint freely; modifiers are unused for paint.
+  mods.paintAdd = controlMode === 'earth' && cmd && !e.shiftKey;
+  mods.paintErase = controlMode === 'earth' && cmd && e.shiftKey;
 }
 
 function ghostOpts() {
   if (paintStroke) {
     return { paint: !paintStroke.erase, remove: paintStroke.erase };
+  }
+  if (controlMode === 'tools') {
+    // Always preview add while navigating is idle; erase has no hover preview.
+    if (toolNavAction() !== null) return {};
+    return { paint: true, remove: false };
   }
   return {
     paint: mods.paintAdd,
@@ -527,9 +581,44 @@ function orbitAroundCursor(dx, dy) {
 
 renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
 
+// In 1-2-3 mode zoom is 2+drag only; swallow wheel/trackpad so OrbitControls
+// (and the page) don't dolly. Capture so we win over OC's own listener.
+renderer.domElement.addEventListener(
+  'wheel',
+  (e) => {
+    if (controlMode !== 'tools') return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  },
+  { passive: false, capture: true }
+);
+
 renderer.domElement.addEventListener('pointerdown', (e) => {
   syncMods(e);
   pointerDown = { x: e.clientX, y: e.clientY };
+
+  if (controlMode === 'tools') {
+    if (toolKeys.orbit) {
+      // 3 + left-drag: same cursor-pivot orbit as Earth shift-drag.
+      if (e.button !== 0) return;
+      pickOrbitPivot(e.clientX, e.clientY, orbitPivot);
+      orbitArmed = true;
+      orbitDragging = false;
+      orbitLastX = e.clientX;
+      orbitLastY = e.clientY;
+      return;
+    }
+    // 1/2 + drag: OrbitControls owns the gesture (mouseButtons already set).
+    if (toolNavAction() !== null) return;
+    if (e.button === 0) {
+      beginPaint(e.clientX, e.clientY, false);
+      updateGhost(e.clientX, e.clientY, ghostOpts());
+    } else if (e.button === 2) {
+      beginPaint(e.clientX, e.clientY, true);
+      updateGhost(e.clientX, e.clientY, ghostOpts());
+    }
+    return;
+  }
 
   if (e.button === 0 && (mods.paintAdd || mods.paintErase)) {
     // Cmd/ctrl(+shift): paint stroke. Takes priority over shift-orbit.
@@ -549,10 +638,13 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
 renderer.domElement.addEventListener('pointermove', (e) => {
   syncMods(e);
   lastPointer = { x: e.clientX, y: e.clientY };
-  if (paintStroke && (e.buttons & 1) !== 0) {
-    tryPaintAt(e.clientX, e.clientY);
-    updateGhost(e.clientX, e.clientY, ghostOpts());
-    return;
+  if (paintStroke) {
+    const held = paintStroke.erase ? 2 : 1; // right vs left button bit
+    if ((e.buttons & held) !== 0) {
+      tryPaintAt(e.clientX, e.clientY);
+      updateGhost(e.clientX, e.clientY, ghostOpts());
+      return;
+    }
   }
   if (orbitArmed && (e.buttons & 1) !== 0) {
     if (!orbitDragging) {
@@ -577,21 +669,50 @@ renderer.domElement.addEventListener('pointermove', (e) => {
 
 renderer.domElement.addEventListener('pointerup', (e) => {
   syncMods(e);
-  if (paintStroke && e.button === 0) endPaint();
+  if (paintStroke && ((paintStroke.erase && e.button === 2) || (!paintStroke.erase && e.button === 0))) {
+    endPaint();
+  }
   if (orbitArmed && e.button === 0) {
     orbitArmed = false;
     orbitDragging = false;
   }
   pointerDown = null;
+  if (controlMode === 'tools') applyControlMode();
   updateGhost(e.clientX, e.clientY, ghostOpts());
 });
 
-renderer.domElement.addEventListener('pointerleave', () => {
+// pointerleave alone is unreliable while OrbitControls has pointer capture
+// (2-drag zoom): button-up outside the window may never hit the canvas
+// listener, leaving LEFT stuck on DOLLY. Window-level up/cancel always ends us.
+function endNavPointer() {
+  const hadGesture = pointerDown || paintStroke || orbitArmed;
   if (paintStroke) endPaint();
   orbitArmed = false;
   orbitDragging = false;
+  if (!hadGesture) return;
+  pointerDown = null;
+  // Drop a stuck OrbitControls dolly/pan if its own pointerup was missed.
+  controls.state = -1; // OrbitControls._STATE.NONE
+  if (controlMode === 'tools') applyControlMode();
+}
+
+window.addEventListener('pointerup', endNavPointer);
+window.addEventListener('pointercancel', endNavPointer);
+renderer.domElement.addEventListener('lostpointercapture', endNavPointer);
+
+renderer.domElement.addEventListener('pointerleave', () => {
+  // Don't clear pointerDown — a captured 1/2-drag still owns the gesture until
+  // pointerup. Only hide the paint ghost while the cursor is off the canvas.
   cursor.visible = false;
 });
+
+function setToolKey(code, down) {
+  if (code === 'Digit1' || code === 'Numpad1') toolKeys.pan = down;
+  else if (code === 'Digit2' || code === 'Numpad2') toolKeys.zoom = down;
+  else if (code === 'Digit3' || code === 'Numpad3') toolKeys.orbit = down;
+  else return false;
+  return true;
+}
 
 window.addEventListener('keydown', (e) => {
   syncMods(e);
@@ -602,11 +723,19 @@ window.addEventListener('keydown', (e) => {
     else undo();
     return;
   }
+  if (controlMode === 'tools' && !e.metaKey && !e.ctrlKey && !e.altKey && setToolKey(e.code, true)) {
+    if (!e.repeat) applyControlMode();
+    updateGhost(lastPointer.x, lastPointer.y, ghostOpts());
+    return;
+  }
   updateGhost(lastPointer.x, lastPointer.y, ghostOpts());
 });
 
 window.addEventListener('keyup', (e) => {
   syncMods(e);
+  if (controlMode === 'tools' && setToolKey(e.code, false)) {
+    applyControlMode();
+  }
   updateGhost(lastPointer.x, lastPointer.y, ghostOpts());
 });
 
@@ -615,6 +744,13 @@ window.addEventListener('blur', () => {
   mods.shift = false;
   mods.paintAdd = false;
   mods.paintErase = false;
+  toolKeys.pan = false;
+  toolKeys.zoom = false;
+  toolKeys.orbit = false;
+  orbitArmed = false;
+  orbitDragging = false;
+  pointerDown = null;
+  if (controlMode === 'tools') applyControlMode();
   cursor.visible = false;
 });
 
@@ -630,6 +766,24 @@ const mod = isApple ? '⌘' : 'Ctrl';
 for (const el of document.querySelectorAll('[data-mod]')) el.textContent = `${mod} drag`;
 for (const el of document.querySelectorAll('[data-mod-shift]')) el.textContent = `${mod}⇧ drag`;
 for (const el of document.querySelectorAll('[data-mod-z]')) el.textContent = `${mod}Z`;
+
+function setControlMode(mode) {
+  if (mode !== 'earth' && mode !== 'tools') return;
+  if (paintStroke) endPaint();
+  orbitArmed = false;
+  orbitDragging = false;
+  toolKeys.pan = false;
+  toolKeys.zoom = false;
+  toolKeys.orbit = false;
+  controlMode = mode;
+  pointerDown = null;
+  applyControlMode();
+  saveControlMode(mode);
+  updateGhost(lastPointer.x, lastPointer.y, ghostOpts());
+}
+
+document.getElementById('mode-earth-btn').addEventListener('click', () => setControlMode('earth'));
+document.getElementById('mode-tools-btn').addEventListener('click', () => setControlMode('tools'));
 
 document.getElementById('grid-btn').addEventListener('click', (e) => {
   gridHelper.visible = !gridHelper.visible;

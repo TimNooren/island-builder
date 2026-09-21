@@ -33,10 +33,21 @@ canvas {
   pointer-events: none;
 }
 
+.hud-modes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+
 .hud-keys {
   margin: 0 0 8px;
   display: grid;
   gap: 2px 10px;
+}
+
+.hud-keys[hidden] {
+  display: none;
 }
 
 .hud-keys > div {
