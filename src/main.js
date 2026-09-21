@@ -8,6 +8,7 @@ import { buildTreesGeometry, createTreeMaterial } from './trees.js';
 import { loadGrid, saveGrid, loadCamera, saveCamera, loadHistory, saveHistory, clearHistory } from './storage.js';
 import { UndoStack } from './history.js';
 import { createRetroRenderer, snapScene } from './retro.js';
+import { createDayNight, DEFAULT_TIME } from './daynight.js';
 
 const SIZE = 32;
 const HEIGHT = 24;
@@ -84,10 +85,11 @@ controls.addEventListener('change', () => {
 // Refreshing mid-damping would otherwise lose the last few hundred ms of motion.
 window.addEventListener('pagehide', () => saveCamera(camera, controls));
 
-// ---------- Lights ----------
-scene.add(new THREE.HemisphereLight(0xdff3ff, 0x4a6b3a, 0.7));
+// ---------- Lights / day–night ----------
+// Colours and intensities are owned by daynight.js; these are just the nodes
+// it drives. Starting values match the old fixed daylight until setTime runs.
+const hemi = new THREE.HemisphereLight(0xdff3ff, 0x4a6b3a, 0.7);
 const sun = new THREE.DirectionalLight(0xfff4e0, 1.6);
-sun.position.set(SIZE * 0.8, SIZE * 1.4, SIZE * 0.4);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
 sun.shadow.camera.near = 1;
@@ -98,7 +100,9 @@ sun.shadow.camera.top = SIZE;
 sun.shadow.camera.bottom = -SIZE;
 sun.shadow.bias = -0.0005;
 sun.target.position.set(SIZE / 2, 0, SIZE / 2);
-scene.add(sun, sun.target);
+scene.add(hemi, sun, sun.target);
+const dayNight = createDayNight({ size: SIZE, scene, hemi, sun });
+dayNight.setTime(DEFAULT_TIME);
 
 // ---------- Water ----------
 const WATER_EXTENT = SIZE * 12;
@@ -632,6 +636,10 @@ document.getElementById('grid-btn').addEventListener('click', (e) => {
   e.currentTarget.setAttribute('aria-pressed', String(gridHelper.visible));
 });
 document.getElementById('clear-btn').addEventListener('click', () => clearIsland());
+
+const timeSlider = document.getElementById('time-slider');
+timeSlider.value = String(DEFAULT_TIME);
+timeSlider.addEventListener('input', () => dayNight.setTime(Number(timeSlider.value)));
 
 // ---------- Loop ----------
 rebuildTerrain();

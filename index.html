@@ -15,6 +15,19 @@
         <div><dt data-mod-shift>⌘⇧ drag</dt><dd>erase</dd></div>
         <div><dt data-mod-z>⌘Z</dt><dd>undo</dd></div>
       </dl>
+      <label class="hud-time">
+        <span class="hud-time-label">Time</span>
+        <input
+          type="range"
+          id="time-slider"
+          class="hud-slider"
+          min="0"
+          max="1"
+          step="0.01"
+          value="0.42"
+          aria-label="Time of day"
+        />
+      </label>
       <div class="hud-actions">
         <button type="button" id="grid-btn" class="hud-btn" aria-pressed="true">Grid</button>
         <button type="button" id="clear-btn" class="hud-btn">Clear</button>

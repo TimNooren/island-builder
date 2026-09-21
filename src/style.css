@@ -56,6 +56,51 @@ canvas {
   margin: 0;
 }
 
+.hud-time {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: center;
+  margin: 0 0 8px;
+  pointer-events: auto;
+  cursor: default;
+}
+
+.hud-time-label {
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.hud-slider {
+  margin: 0;
+  width: 100%;
+  min-width: 96px;
+  height: 4px;
+  appearance: none;
+  -webkit-appearance: none;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.22);
+  outline: none;
+  cursor: pointer;
+}
+
+.hud-slider::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.85);
+}
+
+.hud-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.85);
+}
+
 .hud-actions {
   display: grid;
   grid-template-columns: 1fr 1fr;
