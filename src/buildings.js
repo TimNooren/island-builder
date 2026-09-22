@@ -18,9 +18,11 @@ const DIM_STEP = 0.1;
 const PLACE_EPS = 0.02;
 
 /**
- * Editable axis-aligned boxes in world space. Each building occupies
- * [x, x+sx) × [y, y+sy) × [z, z+sz); the anchor corner stays fixed when
- * dimensions change. Positions and sizes are continuous (not grid-snapped).
+ * Editable boxes. Local size is (sx, sy, sz); the centre — also the yaw
+ * pivot — is (x + sx/2, y + sy/2, z + sz/2). `yaw` rotates around world
+ * up through that centre. At yaw 0, (x, y, z) is the world min corner, so
+ * older saves keep their shape. Positions and sizes are continuous (not
+ * grid-snapped).
  */
 export class BuildingStore {
   constructor() {
@@ -67,6 +69,7 @@ export class BuildingStore {
       sx: opts.sx ?? 1,
       sy: opts.sy ?? 1,
       sz: opts.sz ?? 1,
+      yaw: wrapYaw(opts.yaw ?? 0),
       color: opts.color ?? this.randomColor(),
     };
     this.buildings.push(building);
@@ -90,7 +93,7 @@ export class BuildingStore {
     return true;
   }
 
-  /** Set anchor and size together (used after face extrusion). */
+  /** Set anchor, size, and yaw together (used after face extrusion). */
   setBox(id, box) {
     const b = this.get(id);
     if (!b) return false;
@@ -100,6 +103,15 @@ export class BuildingStore {
     b.sx = clampDim(box.sx);
     b.sy = clampDim(box.sy);
     b.sz = clampDim(box.sz);
+    if (box.yaw != null) b.yaw = wrapYaw(box.yaw);
+    return true;
+  }
+
+  /** Spin around the vertical axis through the centre. The centre stays put. */
+  setYaw(id, yaw) {
+    const b = this.get(id);
+    if (!b) return false;
+    b.yaw = wrapYaw(yaw);
     return true;
   }
 
@@ -123,39 +135,84 @@ function clampDim(v) {
   return Math.round(clamped / DIM_STEP) * DIM_STEP;
 }
 
+/** Wrap to (−π, π] so a full turn compares equal to no turn. */
+export function wrapYaw(yaw) {
+  if (!Number.isFinite(yaw)) return 0;
+  return Math.atan2(Math.sin(yaw), Math.cos(yaw));
+}
+
 export function formatDim(v) {
   const s = clampDim(v).toFixed(1);
   return s.endsWith('.0') ? s.slice(0, -2) : s;
 }
 
 /**
- * Extrude one face outward by `delta` (displacement along the face normal).
- * Negative faces move the anchor corner so the opposite face stays put.
+ * Extrude one face outward by `delta` (displacement along the local face
+ * normal). The centre slides by half the growth along that normal — rotated
+ * into world space — so the opposite face stays put even after a yaw.
  */
 export function applyExtrude(box, normal, delta) {
-  const out = { x: box.x, y: box.y, z: box.z, sx: box.sx, sy: box.sy, sz: box.sz };
+  const out = {
+    x: box.x,
+    y: box.y,
+    z: box.z,
+    sx: box.sx,
+    sy: box.sy,
+    sz: box.sz,
+    yaw: box.yaw || 0,
+  };
   const nx = normal.x;
   const ny = normal.y;
   const nz = normal.z;
-  if (Math.abs(nx) > 0.5) {
-    const old = out.sx;
-    out.sx = clampDim(out.sx + delta);
-    if (nx < 0) out.x = box.x - (out.sx - old);
-  } else if (Math.abs(ny) > 0.5) {
-    const old = out.sy;
-    out.sy = clampDim(out.sy + delta);
-    if (ny < 0) out.y = box.y - (out.sy - old);
-  } else {
-    const old = out.sz;
-    out.sz = clampDim(out.sz + delta);
-    if (nz < 0) out.z = box.z - (out.sz - old);
-  }
+  const oldSx = out.sx;
+  const oldSy = out.sy;
+  const oldSz = out.sz;
+  if (Math.abs(nx) > 0.5) out.sx = clampDim(out.sx + delta);
+  else if (Math.abs(ny) > 0.5) out.sy = clampDim(out.sy + delta);
+  else out.sz = clampDim(out.sz + delta);
+
+  const shiftX = (out.sx - oldSx) * 0.5 * (Math.abs(nx) > 0.5 ? Math.sign(nx) : 0);
+  const shiftY = (out.sy - oldSy) * 0.5 * (Math.abs(ny) > 0.5 ? Math.sign(ny) : 0);
+  const shiftZ = (out.sz - oldSz) * 0.5 * (Math.abs(nz) > 0.5 ? Math.sign(nz) : 0);
+  const c = Math.cos(out.yaw);
+  const s = Math.sin(out.yaw);
+  const cx = box.x + oldSx * 0.5 + (c * shiftX + s * shiftZ);
+  const cy = box.y + oldSy * 0.5 + shiftY;
+  const cz = box.z + oldSz * 0.5 + (-s * shiftX + c * shiftZ);
+  out.x = cx - out.sx * 0.5;
+  out.y = cy - out.sy * 0.5;
+  out.z = cz - out.sz * 0.5;
   return out;
 }
 
-/** Centre of a building box in world space. */
+/** Centre of a building box in world space. Also the yaw pivot. */
 export function buildingCenter(b) {
   return [b.x + b.sx * 0.5, b.y + b.sy * 0.5, b.z + b.sz * 0.5];
+}
+
+/**
+ * World position of a point given in min-corner local coordinates
+ * (0..sx, 0..sy, 0..sz), after yaw about the centre.
+ */
+export function buildingLocalToWorld(b, lx, ly, lz, target = new THREE.Vector3()) {
+  const cx = b.x + b.sx * 0.5;
+  const cy = b.y + b.sy * 0.5;
+  const cz = b.z + b.sz * 0.5;
+  const yaw = b.yaw || 0;
+  const c = Math.cos(yaw);
+  const s = Math.sin(yaw);
+  const dx = lx - b.sx * 0.5;
+  const dy = ly - b.sy * 0.5;
+  const dz = lz - b.sz * 0.5;
+  return target.set(cx + c * dx + s * dz, cy + dy, cz - s * dx + c * dz);
+}
+
+/** World direction of a building-local vector (yaw only, no translation). */
+export function buildingLocalDirToWorld(b, lx, ly, lz, target = new THREE.Vector3()) {
+  const yaw = b.yaw || 0;
+  const c = Math.cos(yaw);
+  const s = Math.sin(yaw);
+  return target.set(c * lx + s * lz, ly, -s * lx + c * lz);
 }
 
 const _worldNormal = new THREE.Vector3();
@@ -205,7 +262,13 @@ export function createBuildingsRoot(store) {
 /** @param {boolean} showSelection outline + only when build mode is active and a cube is selected */
 export function syncBuildingsMeshes(root, store, showSelection = false) {
   for (const child of [...root.children]) {
-    if (child.userData.isSelectionOutline || child.userData.isExtrudeGizmo) continue;
+    if (
+      child.userData.isSelectionOutline ||
+      child.userData.isExtrudeGizmo ||
+      child.userData.isRotateGizmo
+    ) {
+      continue;
+    }
     child.geometry?.dispose?.();
     child.material?.dispose?.();
     root.remove(child);
@@ -219,6 +282,7 @@ export function syncBuildingsMeshes(root, store, showSelection = false) {
     mesh.castShadow = true;
     mesh.receiveShadow = true;
     mesh.position.set(...buildingCenter(b));
+    mesh.rotation.y = b.yaw || 0;
     mesh.userData.buildingId = b.id;
     root.add(mesh);
   }
@@ -252,6 +316,7 @@ export function syncSelectionOutline(root, store, showSelection) {
   outline.geometry.dispose();
   outline.geometry = new THREE.EdgesGeometry(new THREE.BoxGeometry(sel.sx, sel.sy, sel.sz));
   outline.position.set(...buildingCenter(sel));
+  outline.rotation.y = sel.yaw || 0;
   outline.scale.set(1.02, 1.02, 1.02);
 }
 
@@ -297,7 +362,7 @@ export function hideBuildGhost(mesh) {
 /** Serialize for storage. */
 export function serializeBuildings(store) {
   return {
-    buildings: store.buildings.map(({ id, x, y, z, sx, sy, sz, color }) => ({
+    buildings: store.buildings.map(({ id, x, y, z, sx, sy, sz, yaw, color }) => ({
       id,
       x,
       y,
@@ -305,6 +370,7 @@ export function serializeBuildings(store) {
       sx,
       sy,
       sz,
+      yaw: yaw || 0,
       color,
     })),
     nextId: store.nextId,
@@ -331,7 +397,8 @@ export function validateBuildingsPayload(payload) {
       b.sx > MAX_DIM ||
       b.sy > MAX_DIM ||
       b.sz > MAX_DIM ||
-      !Number.isInteger(b.color)
+      !Number.isInteger(b.color) ||
+      (b.yaw != null && !Number.isFinite(b.yaw))
     ) {
       return null;
     }
@@ -343,6 +410,7 @@ export function validateBuildingsPayload(payload) {
       sx: b.sx,
       sy: b.sy,
       sz: b.sz,
+      yaw: wrapYaw(b.yaw ?? 0),
       color: b.color,
     });
     maxId = Math.max(maxId, b.id);

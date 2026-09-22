@@ -19,6 +19,11 @@ import {
   pickExtrudeHandle,
   beginExtrudeDrag,
   extrudeFromDrag,
+  createRotateGizmo,
+  syncRotateGizmo,
+  pickRotateHandle,
+  beginRotateDrag,
+  yawFromDrag,
 } from './buildgizmo.js';
 import { loadBuildings, saveBuildings } from './storage.js';
 
@@ -29,12 +34,12 @@ const MAX_BUILDING_HISTORY = 32;
 const DEFAULT_BUILD_DIMS = { sx: 1, sy: 1, sz: 1 };
 
 /**
- * Build-mode interaction: placement, selection, face extrusion, and that
+ * Build-mode interaction: placement, selection, face extrusion, yaw, and that
  * mode's own undo. Sculpting never imports this. main.js turns it on, forwards
  * pointer move/up and undo, and keeps camera orbit.
  *
- * The extrude handle listener is registered here, in the capture phase, so it
- * runs before OrbitControls and can disable pan for that gesture. Tear-out
+ * The gizmo listener is registered here, in the capture phase, so it runs
+ * before OrbitControls and can disable pan for that gesture. Tear-out
  * removes the listener via dispose().
  */
 export function createBuildMode({
@@ -56,12 +61,18 @@ export function createBuildMode({
   extrudeGizmo.userData.isExtrudeGizmo = true;
   buildingsRoot.add(extrudeGizmo);
   snapScene(extrudeGizmo);
+  const rotateGizmo = createRotateGizmo();
+  rotateGizmo.userData.isRotateGizmo = true;
+  buildingsRoot.add(rotateGizmo);
+  snapScene(rotateGizmo);
 
   const raycaster = new THREE.Raycaster();
   const pointerNdc = new THREE.Vector2();
 
-  /** @type {{ id: number, before: object, normal: THREE.Vector3, startX: number, startY: number, axisPxX: number, axisPxY: number, startBox: object } | null} */
+  /** @type {{ id: number, before: object, normal: THREE.Vector3, localNormal: THREE.Vector3, startX: number, startY: number, axisPxX: number, axisPxY: number, startBox: object } | null} */
   let extrudeDrag = null;
+  /** @type {{ id: number, before: object, usePlane: boolean, startYaw: number, startX: number, startY: number } | null} */
+  let rotateDrag = null;
   let active = false;
   // Preview colour for the next placement — stable until a cube is placed.
   let nextBuildColor = buildingStore.randomColor();
@@ -84,7 +95,21 @@ export function createBuildMode({
   }
 
   function cloneBuilding(b) {
-    return { id: b.id, x: b.x, y: b.y, z: b.z, sx: b.sx, sy: b.sy, sz: b.sz, color: b.color };
+    return {
+      id: b.id,
+      x: b.x,
+      y: b.y,
+      z: b.z,
+      sx: b.sx,
+      sy: b.sy,
+      sz: b.sz,
+      yaw: b.yaw || 0,
+      color: b.color,
+    };
+  }
+
+  function yawNear(a, b) {
+    return Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b))) < 1e-3;
   }
 
   function boxEqual(a, b) {
@@ -94,7 +119,8 @@ export function createBuildMode({
       a.z === b.z &&
       a.sx === b.sx &&
       a.sy === b.sy &&
-      a.sz === b.sz
+      a.sz === b.sz &&
+      yawNear(a.yaw || 0, b.yaw || 0)
     );
   }
 
@@ -103,31 +129,40 @@ export function createBuildMode({
     raycaster.setFromCamera(pointerNdc, camera);
   }
 
+  function syncGizmos(building) {
+    const show = active && !!building;
+    const viewportHeight = window.innerHeight;
+    syncExtrudeGizmo(extrudeGizmo, building, show, camera, viewportHeight);
+    syncRotateGizmo(rotateGizmo, building, show, camera, viewportHeight);
+  }
+
   function syncChrome() {
     syncSelectionOutline(buildingsRoot, buildingStore, active);
-    syncExtrudeGizmo(extrudeGizmo, active ? buildingStore.selected : null, active);
+    syncGizmos(active ? buildingStore.selected : null);
   }
 
   function rebuild() {
     syncBuildingsMeshes(buildingsRoot, buildingStore, active);
-    syncExtrudeGizmo(extrudeGizmo, active ? buildingStore.selected : null, active);
+    syncGizmos(active ? buildingStore.selected : null);
     snapScene(buildingsRoot);
     persist();
     if (active && lastHover) updateHover(lastHover.x, lastHover.y);
   }
 
-  function endExtrudeDrag() {
-    if (!extrudeDrag) return;
+  function endGesture() {
+    const drag = extrudeDrag || rotateDrag;
+    if (!drag) return;
     controls.enabled = true;
-    const b = buildingStore.get(extrudeDrag.id);
+    const b = buildingStore.get(drag.id);
     if (b) {
       const after = cloneBuilding(b);
-      if (!boxEqual(extrudeDrag.before, after)) {
-        pushHistory({ type: 'box', id: b.id, before: extrudeDrag.before, after });
+      if (!boxEqual(drag.before, after)) {
+        pushHistory({ type: 'box', id: b.id, before: drag.before, after });
         persist();
       }
     }
     extrudeDrag = null;
+    rotateDrag = null;
   }
 
   function pushHistory(entry) {
@@ -190,7 +225,11 @@ export function createBuildMode({
       return;
     }
     aim(clientX, clientY);
-    if (pickBuilding(raycaster, buildingsRoot) != null) {
+    if (
+      pickBuilding(raycaster, buildingsRoot) != null ||
+      pickExtrudeHandle(raycaster, extrudeGizmo) ||
+      pickRotateHandle(raycaster, rotateGizmo)
+    ) {
       hideBuildGhost(buildGhost);
       return;
     }
@@ -209,16 +248,26 @@ export function createBuildMode({
 
   // Capture phase: OrbitControls listens on bubble and would start a pan on
   // the same click. Disabling controls here, before that listener, keeps the
-  // handle drag from also moving the camera.
+  // handle drag from also moving the camera. The gizmos are tested on their
+  // own, so a block between the camera and an arrow doesn't steal the click.
   function onPointerDownCapture(e) {
     if (!active || e.button !== 0 || e.shiftKey || !buildingStore.selected) return;
     aim(e.clientX, e.clientY);
-    const handle = pickExtrudeHandle(raycaster, extrudeGizmo);
-    if (!handle) return;
+    const extrudeHit = pickExtrudeHandle(raycaster, extrudeGizmo);
+    const rotateHit = pickRotateHandle(raycaster, rotateGizmo);
     const sel = buildingStore.selected;
-    const drag = beginExtrudeDrag(e.clientX, e.clientY, handle, cloneBuilding(sel), camera, window);
-    if (!drag) return;
-    extrudeDrag = { id: sel.id, before: cloneBuilding(sel), ...drag };
+    const rotate =
+      rotateHit && (!extrudeHit || rotateHit.distance <= extrudeHit.distance);
+    if (rotate) {
+      const drag = beginRotateDrag(e.clientX, e.clientY, raycaster, rotateHit.point, sel, camera, window);
+      rotateDrag = { id: sel.id, before: cloneBuilding(sel), ...drag };
+    } else if (extrudeHit) {
+      const drag = beginExtrudeDrag(e.clientX, e.clientY, extrudeHit, cloneBuilding(sel), camera, window);
+      if (!drag) return;
+      extrudeDrag = { id: sel.id, before: cloneBuilding(sel), ...drag };
+    } else {
+      return;
+    }
     controls.enabled = false;
     try {
       domElement.setPointerCapture(e.pointerId);
@@ -232,27 +281,38 @@ export function createBuildMode({
   domElement.addEventListener('pointerdown', onPointerDownCapture, { capture: true });
 
   function pointerMove(e) {
-    if (!extrudeDrag || (e.buttons & 1) === 0) return false;
-    const next = extrudeFromDrag(extrudeDrag, e.clientX, e.clientY);
-    if (next) {
-      buildingStore.setBox(extrudeDrag.id, next);
-      syncBuildingsMeshes(buildingsRoot, buildingStore, true);
-      syncExtrudeGizmo(extrudeGizmo, buildingStore.get(extrudeDrag.id), true);
-      snapScene(buildingsRoot);
+    if ((e.buttons & 1) === 0 || (!extrudeDrag && !rotateDrag)) return false;
+    if (extrudeDrag) {
+      const next = extrudeFromDrag(extrudeDrag, e.clientX, e.clientY);
+      if (next) {
+        buildingStore.setBox(extrudeDrag.id, next);
+        syncBuildingsMeshes(buildingsRoot, buildingStore, true);
+        syncGizmos(buildingStore.get(extrudeDrag.id));
+        snapScene(buildingsRoot);
+      }
+    } else {
+      aim(e.clientX, e.clientY);
+      const yaw = yawFromDrag(rotateDrag, e.clientX, e.clientY, raycaster);
+      if (yaw != null) {
+        buildingStore.setYaw(rotateDrag.id, yaw);
+        syncBuildingsMeshes(buildingsRoot, buildingStore, true);
+        syncGizmos(buildingStore.get(rotateDrag.id));
+        snapScene(buildingsRoot);
+      }
     }
     hideGhost();
     return true;
   }
 
   /**
-   * End an extrude or, on a click, place / select / delete.
-   * Returns true when the extrude gesture consumed the event so the caller
+   * End an extrude or rotate or, on a click, place / select / delete.
+   * Returns true when a gizmo gesture consumed the event so the caller
    * skips orbit cleanup. Clicks return false; orbit cleanup still runs.
    * @param {{ x: number, y: number } | null} pointerDown
    */
   function pointerUp(e, pointerDown) {
-    if (extrudeDrag && e.button === 0) {
-      endExtrudeDrag();
+    if ((extrudeDrag || rotateDrag) && e.button === 0) {
+      endGesture();
       return true;
     }
     if (!active || !pointerDown) return false;
@@ -296,14 +356,14 @@ export function createBuildMode({
   }
 
   function setActive(on) {
-    if (!on && extrudeDrag) endExtrudeDrag();
+    if (!on && (extrudeDrag || rotateDrag)) endGesture();
     active = on;
     syncChrome();
     if (!on) hideGhost();
   }
 
   function cancel() {
-    endExtrudeDrag();
+    endGesture();
   }
 
   let disposed = false;
@@ -329,7 +389,12 @@ export function createBuildMode({
     hideGhost,
     updateHover,
     isActive: () => active,
-    isDragging: () => extrudeDrag != null,
+    isDragging: () => extrudeDrag != null || rotateDrag != null,
+    // Camera distance changes the world size of the handles. Call each frame.
+    updateFrame() {
+      if (!active || !buildingStore.selected) return;
+      syncGizmos(buildingStore.selected);
+    },
     dispose,
   };
 }

@@ -25,9 +25,9 @@ const DRAG_THRESHOLD_PX = 5;
 // Camera saves are debounced: OrbitControls fires `change` every frame while
 // damping settles, and one write shortly after the view stops is enough.
 const CAMERA_SAVE_DELAY_MS = 300;
-// Shadow maps are a post-PS1 luxury; the low-res, dithered look reads better
-// without them (see retro.js). Flip on for a softer, modern rendering.
-const SHADOWS = false;
+// Sun and moon shadow maps. They sit under trees, cliffs, and buildings while
+// the low-res dither (retro.js) stays. Flip off for the flatter PS1 look.
+const SHADOWS = true;
 // Right-drag orbit keeps the camera at least this far above the water. The
 // pitch limit alone doesn't guarantee it when pivoting around a raised point.
 const ORBIT_MIN_CAMERA_Y = WATER_LEVEL + 0.05;
@@ -152,19 +152,31 @@ window.addEventListener('pagehide', () => saveCamera(camera, controls));
 // it drives. Starting values match the old fixed daylight until setTime runs.
 const hemi = new THREE.HemisphereLight(0xdff3ff, 0x4a6b3a, 0.7);
 const sun = new THREE.DirectionalLight(0xfff4e0, 1.6);
-sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
-sun.shadow.camera.near = 1;
-sun.shadow.camera.far = SIZE * 4;
-sun.shadow.camera.left = -SIZE;
-sun.shadow.camera.right = SIZE;
-sun.shadow.camera.top = SIZE;
-sun.shadow.camera.bottom = -SIZE;
-sun.shadow.bias = -0.0005;
 sun.target.position.set(SIZE / 2, 0, SIZE / 2);
 scene.add(hemi, sun, sun.target);
 const dayNight = createDayNight({ size: SIZE, scene, hemi, sun });
 dayNight.setTime(DEFAULT_TIME);
+
+// One ortho box for both directionals, centred on the island (each light's
+// target). ±SIZE leaves margin when the sun is low and the ground stretches
+// in light space; far reaches past the light's orbit. A little normal bias
+// keeps the smoothed terrain from shadowing itself — depth bias alone stripes it.
+function configureShadow(light) {
+  light.castShadow = true;
+  light.shadow.mapSize.set(2048, 2048);
+  light.shadow.camera.near = 1;
+  light.shadow.camera.far = SIZE * 4;
+  light.shadow.camera.left = -SIZE;
+  light.shadow.camera.right = SIZE;
+  light.shadow.camera.top = SIZE;
+  light.shadow.camera.bottom = -SIZE;
+  light.shadow.bias = -0.0002;
+  light.shadow.normalBias = 0.04;
+}
+if (SHADOWS) {
+  configureShadow(sun);
+  configureShadow(dayNight.moonLight);
+}
 
 // ---------- Water ----------
 const WATER_EXTENT = SIZE * 12;
@@ -843,6 +855,7 @@ const clock = new THREE.Clock();
 function animate() {
   requestAnimationFrame(animate);
   controls.update();
+  buildMode.updateFrame();
   water.update(clock.getElapsedTime());
   retro.render(scene, camera);
 }

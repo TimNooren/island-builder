@@ -56,6 +56,50 @@ function hash(a, b, c) {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 
+// IcosahedronGeometry is non-indexed, so each corner is stored once per face
+// and computeVertexNormals() would give the whole triangle one normal — the
+// flat shade the terrain no longer uses. The canopy jitter is hashed from
+// position, so those copies stay coincident; averaging the face normals that
+// land on one point is the smooth normal a shared vertex would have had.
+function smoothCoincidentNormals(geometry) {
+  const pos = geometry.getAttribute('position');
+  const acc = new Map();
+  const a = new THREE.Vector3();
+  const b = new THREE.Vector3();
+  const c = new THREE.Vector3();
+  const e1 = new THREE.Vector3();
+  const e2 = new THREE.Vector3();
+
+  for (let i = 0; i < pos.count; i += 3) {
+    a.fromBufferAttribute(pos, i);
+    b.fromBufferAttribute(pos, i + 1);
+    c.fromBufferAttribute(pos, i + 2);
+    // Area-weighted, so a larger face pulls the corner more than a sliver.
+    e1.subVectors(b, a);
+    e2.subVectors(c, a);
+    e1.cross(e2);
+    for (let k = 0; k < 3; k++) {
+      const vi = i + k;
+      const key = `${pos.getX(vi)},${pos.getY(vi)},${pos.getZ(vi)}`;
+      let n = acc.get(key);
+      if (!n) acc.set(key, (n = [0, 0, 0]));
+      n[0] += e1.x;
+      n[1] += e1.y;
+      n[2] += e1.z;
+    }
+  }
+
+  const normals = new Float32Array(pos.count * 3);
+  for (let i = 0; i < pos.count; i++) {
+    const n = acc.get(`${pos.getX(i)},${pos.getY(i)},${pos.getZ(i)}`);
+    const len = Math.hypot(n[0], n[1], n[2]) || 1;
+    normals[i * 3] = n[0] / len;
+    normals[i * 3 + 1] = n[1] / len;
+    normals[i * 3 + 2] = n[2] / len;
+  }
+  geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+}
+
 function paint(geometry, color, shadeFn) {
   const pos = geometry.getAttribute('position');
   const colors = new Float32Array(pos.count * 3);
@@ -102,7 +146,7 @@ export function createTreeGeometry(params = {}) {
   }
   canopy.rotateY(hash(seed, 7, 3) * Math.PI * 2);
   canopy.translate(0, canopyBottom + ry, 0);
-  canopy.computeVertexNormals();
+  smoothCoincidentNormals(canopy);
   paint(canopy, p.canopyColor, (y) =>
     THREE.MathUtils.lerp(CANOPY_SHADE_BOTTOM, 1, THREE.MathUtils.clamp((y - canopyBottom) / (2 * ry), 0, 1))
   );
